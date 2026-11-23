@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- Web/API сервісу «Меню»: контролери, Program.cs, appsettings.json, Swagger, Serilog, Dockerfile. -->
+
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <UserSecretsId>smakoviz-menu-api</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
+    <!-- потрібен інструменту dotnet-ef у стартовому проєкті (міграції) -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.*">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Menu.Bll\Menu.Bll.csproj" />
+    <!-- Dal потрібен ЛИШЕ Program.cs (composition root): AddDbContext, UnitOfWork, міграції й сідінг.
+         Контролери працюють тільки з сервісами BLL і DbContext не бачать. -->
+    <ProjectReference Include="..\Menu.Dal\Menu.Dal.csproj" />
+  </ItemGroup>
+</Project>

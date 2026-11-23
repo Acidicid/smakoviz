@@ -1,0 +1,70 @@
+### SmakoViz Menu API — ручні запити (Visual Studio / VS Code REST Client / Rider)
+@api = http://localhost:5090
+
+### Пагінація: друга сторінка по 5 → totalCount = усі страви (10), а не 5
+GET {{api}}/api/dishes?page=2&pageSize=5
+
+### Фільтри + сортування (усе в SQL): піца від 100 грн, дорожчі першими
+GET {{api}}/api/dishes?search=Піца&minPrice=100&sortBy=price&sortDir=desc
+
+### Страви категорії «Хіт продажу» (id 7), лише доступні
+GET {{api}}/api/dishes?categoryId=7&onlyAvailable=true
+
+### Недозволене поле сортування → 400
+GET {{api}}/api/dishes?sortBy=password
+
+### Eager Loading: картка страви — у лозі ОДИН SQL-запит
+GET {{api}}/api/dishes/101
+
+### Explicit Loading: ресторан + профіль + меню — у лозі ТРИ SQL-запити
+GET {{api}}/api/restaurants/1
+
+### Неіснуючий Id → 404 ProblemDetails
+GET {{api}}/api/dishes/999999
+
+### Створити страву → 201 + Location
+POST {{api}}/api/dishes
+Content-Type: application/json
+
+{
+  "restaurantId": 1,
+  "name": "Деруни зі сметаною",
+  "price": 135.50,
+  "weightGrams": 300,
+  "calories": 520,
+  "initialPortions": 25,
+  "categoryIds": [2, 6]
+}
+
+### Повторно та сама назва в тому ж ресторані → 409
+POST {{api}}/api/dishes
+Content-Type: application/json
+
+{ "restaurantId": 1, "name": "Деруни зі сметаною", "price": 140 }
+
+### Порожня назва і від'ємна ціна → 400 з помилками по полях
+POST {{api}}/api/dishes
+Content-Type: application/json
+
+{ "restaurantId": 1, "name": "", "price": -5 }
+
+### Бізнес-правило сутності: списати більше порцій, ніж є → 409
+POST {{api}}/api/dishes/101/portions/remove
+Content-Type: application/json
+
+{ "quantity": 999 }
+
+### Змінити ціну (метод сутності ChangePrice)
+PUT {{api}}/api/dishes/102/price
+Content-Type: application/json
+
+{ "newPrice": 155 }
+
+### M:N через проміжну сутність: нові страви категорії за 120 днів (AddedAt)
+GET {{api}}/api/categories/bestseller/recent?days=120
+
+### M:N через проміжну сутність: рекомендовані (IsFeatured) у «Піца»
+GET {{api}}/api/categories/3/featured
+
+### Ресторан зі стравами видалити не можна → 409
+DELETE {{api}}/api/restaurants/1

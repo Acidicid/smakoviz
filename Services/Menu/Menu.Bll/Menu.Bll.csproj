@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Business Logic Layer: сервіси, DTO, специфікації (Specification pattern), валідатори
+       FluentValidation, профілі AutoMapper. З EF Core напряму НЕ працює — лише через Unit of Work. -->
+
+  <ItemGroup>
+    <PackageReference Include="AutoMapper" Version="15.*" />
+    <PackageReference Include="FluentValidation" Version="12.*" />
+    <!-- AddValidatorsFromAssemblyContaining (замість застарілого AddFluentValidation) -->
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="12.*" />
+    <PackageReference Include="Ardalis.Specification" Version="9.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Menu.Dal\Menu.Dal.csproj" />
+    <ProjectReference Include="..\Menu.Domain\Menu.Domain.csproj" />
+  </ItemGroup>
+</Project>

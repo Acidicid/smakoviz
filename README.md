@@ -5,6 +5,7 @@
 |------|-------------|--------|
 | Лаб. 01 | Проєктування 3 баз: SQL (Доставка, Меню) + MongoDB (Відгуки) | [розділи 1–8](#1-предметна-область) |
 | Лаб. 02 | Мікросервіс «Доставка»: DAL (ADO.NET + Dapper, Unit of Work) → BLL → Web API, запуск через .NET Aspire | [розділ 9](#9-лаб-02--мікросервіс-доставка-dal--bll--api--aspire) |
+| Лаб. 03 | Мікросервіс «Меню» на EF Core: Code-First, Fluent API, міграції, Eager/Explicit/M:N, специфікації, пагінація, FluentValidation, Serilog | [розділ 10](#10-лаб-03--мікросервіс-меню-на-ef-core) |
 
 ## 1. Предметна область
 
@@ -195,6 +196,12 @@ Services/
     Delivery.Bll/      сервіси, DTO, профілі AutoMapper, валідація
     Delivery.Dal/      інтерфейси й реалізації репозиторіїв, Unit of Work
     Delivery.Domain/   моделі, доменні винятки
+  Menu/              мікросервіс «Меню» = Проєкт №2 (EF Core)                  (Лаб. 03)
+    Menu.Api/          контролери, Program.cs, appsettings.json, Dockerfile
+    Menu.Bll/          сервіси, DTO, специфікації, валідатори, мапінг
+    Menu.Dal/          DbContext, Configurations/, Migrations/, репозиторії, Seeding/
+    Menu.Domain/       сутності з бізнес-правилами, доменні винятки
+    create-migration.ps1  генерація міграції InitialCreate + SQL-скрипту
 README.md            опис домену, контекстів, політика дублювання, ERD, розгортання
 docs/
   contexts.md          контексти, агрегати, життєвий цикл замовлення
@@ -479,3 +486,164 @@ curl -i -X POST $API/api/customers -H "Content-Type: application/json" -d '{"ema
 | Swagger | Aspire Dashboard |
 |---------|------------------|
 | ![Swagger](docs/screenshots/lab02-swagger.png) | ![Aspire Dashboard](docs/screenshots/lab02-aspire-dashboard.png) |
+
+---
+
+## 10. Лаб. 03 — мікросервіс «Меню» на EF Core
+
+Сервіс **Menu** — Проєкт №2 з Лаб. 01 (`SmakoViz_Menu`), побудований **Code-First**: схему бази створюють
+міграції EF Core з моделей і конфігурацій Fluent API. Будова шарів — та сама, що в Лаб. 02.
+
+### 10.1. Запуск
+
+**Крок 1 — один раз: згенерувати міграцію** (база для цього не потрібна):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File Services\Menu\create-migration.ps1
+```
+
+Скрипт ставить `dotnet-ef`, створює `Services/Menu/Menu.Dal/Migrations/*_InitialCreate.cs` + `MenuDbContextModelSnapshot.cs`
+і SQL-скрипт `Migrations/InitialCreate.sql`. Деталі — у [`Menu.Dal/Migrations/README.md`](Services/Menu/Menu.Dal/Migrations/README.md).
+
+**Крок 2 — запуск усієї платформи через Aspire** (Docker Desktop має бути запущений):
+
+```bash
+dotnet run --project Platform.AppHost
+```
+
+У Dashboard з'являться `sql`, `DeliveryDb`, `MenuDb`, `delivery-api`, `menu-api`. При старті `menu-api`:
+
+1. `MigrateAsync()` застосовує міграції (таблиці, індекси, CHECK, довідник категорій з `HasData`);
+2. `DbInitializer.SeedAsync()` додає 3 ресторани з профілями й 10 страв — **лише якщо їх ще немає**
+   (повторний запуск дублів не створює; у Production сідінг вимкнено, а ще його вимикає `Database:Seed=false`).
+
+Відкрий адресу `menu-api` з Dashboard і допиши `/swagger`.
+
+Без Aspire (на SQL Server з Лаб. 01, `db/deploy.ps1`): `dotnet run --project Services/Menu/Menu.Api` →
+`http://localhost:5090/swagger` (база `SmakoViz_Menu_Ef` створиться міграцією).
+
+Docker-образ API: `docker build -f Services/Menu/Menu.Api/Dockerfile -t smakoviz/menu-api .` (з кореня репозиторію).
+
+### 10.2. Модель (Code-First + Fluent API)
+
+```mermaid
+erDiagram
+    Restaurants ||--|| RestaurantProfiles : "1:1"
+    Restaurants ||--o{ Dishes : "1:N"
+    Dishes ||--o{ DishCategories : "1:N"
+    Categories ||--o{ DishCategories : "1:N"
+    DishCategories {
+        bigint DishId PK, FK
+        int CategoryId PK, FK
+        datetime2 AddedAt "own field"
+        bit IsFeatured "own field"
+    }
+```
+
+| Сутність | Бізнес-правила в самій сутності (приватні setter-и, зміни лише методами) |
+|----------|---------------------------------------------------------------------------|
+| `Dish` | ціна в конструкторі й `ChangePrice()` — завжди > 0; порції — лише `AddPortions()` / `RemovePortions()` (аналог `AddStock`/`RemoveStock` з eShop, у мінус не можна); категорії — `AddToCategory()` / `RemoveFromCategory()` (дубль заборонено) |
+| `Restaurant` | slug — лише `a-z0-9-`; профіль 1:1 — `SetProfile()`; `Activate()` / `Deactivate()` |
+| `RestaurantProfile` | години відкриття й закриття різні, мінімальна сума ≥ 0 |
+| `Category` | довідник; засівається `HasData` з фіксованими Id |
+| `DishCategory` | **явна проміжна сутність M:N**: складений ключ `(DishId, CategoryId)` + власні поля `AddedAt`, `IsFeatured` |
+
+Кожна сутність має свій `IEntityTypeConfiguration<T>` у `Menu.Dal/Configurations/` (таблиця, ключі, довжини,
+`decimal(18,2)`, унікальні індекси, CHECK-обмеження, зв'язки), підключення — одним рядком
+`modelBuilder.ApplyConfigurationsFromAssembly(...)` в `OnModelCreating`.
+Аудит (`CreatedAt/By`, `UpdatedAt/By`), м'яке видалення (`IsDeleted` + глобальний фільтр) і `RowVersion` — у
+`AuditableEntity`; значення проставляє `MenuDbContext.SaveChangesAsync`.
+
+### 10.3. Репозиторії та Unit of Work
+
+| Репозиторій | Прийом | Метод | SQL-запитів у лозі |
+|-------------|--------|-------|--------------------|
+| `GenericRepository<T>` | Async Generic Repository на `DbSet<T>` | `GetByIdAsync`, `GetAllAsync`, `AddAsync`, `Update`, `Delete`, `ListAsync(spec)`, `CountAsync(spec)` | — |
+| `DishRepository` | **Eager Loading** | `GetWithDetailsAsync` — `Include(Restaurant).ThenInclude(Profile)` + `Include(DishCategories).ThenInclude(Category)` | **1** |
+| `RestaurantRepository` | **Explicit Loading** | `GetWithMenuAsync` — ресторан, потім `Entry().Reference(Profile).LoadAsync()`, потім `Entry().Collection(Dishes).Query()...LoadAsync()` | **3** (окремі) |
+| `DishCategoryRepository` | **LINQ to Entities через проміжну сутність M:N** | `GetRecentlyAddedAsync` (за `AddedAt`), `GetFeaturedAsync` (за `IsFeatured`), `CountAvailableDishesByCategoryAsync` (GROUP BY) | 1 |
+
+`Update` і `Delete` лише змінюють стан у Change Tracker; **репозиторії нічого не зберігають самі** —
+`UnitOfWork.SaveChangesAsync()` викликається один раз наприкінці бізнес-операції (усі зміни — однією транзакцією).
+Конфлікт `RowVersion` і порушення UNIQUE `UnitOfWork` перетворює на `ConflictException` (409).
+
+### 10.4. Пагінація, фільтрація, сортування (у SQL)
+
+`GET /api/dishes?search=Піца&minPrice=100&maxPrice=300&categoryId=3&onlyAvailable=true&sortBy=price&sortDir=desc&page=1&pageSize=5`
+
+- `page` — з 1; `pageSize` — за замовчуванням 20, максимум 100 (більше обрізається);
+- фільтри: `search`, `restaurantId`, `categoryId` (через M:N), `minPrice`, `maxPrice`, `onlyAvailable`;
+- сортування лише за дозволеними полями: `name | price | calories | createdAt`, `sortDir=asc|desc`
+  (інше → 400 від `DishQueryValidator`);
+- фільтри, `ORDER BY` і `Skip/Take` описані в **специфікації** `DishesFilterSpec` і виконуються **до** `ToListAsync()`:
+  база повертає лише потрібну сторінку (`OFFSET ... FETCH`), а `totalCount` рахує окремий `SELECT COUNT(*)`.
+
+Відповідь — у тілі **і** в заголовках (`X-Total-Count`, `X-Total-Pages`, `X-Page`, `X-Page-Size`):
+
+```json
+{
+  "items": [ { "id": 202, "restaurantName": "Pizza Pronto", "name": "Піца Чотири сири 30 см", "price": 265.00, "...": "..." } ],
+  "totalCount": 10, "page": 2, "pageSize": 5, "totalPages": 2, "hasNext": false, "hasPrevious": true
+}
+```
+
+Ресторани: `GET /api/restaurants?city=Чернівці&cuisineType=Італійська&sortBy=name&page=1&pageSize=10`
+(друга специфікація `RestaurantsFilterSpec` працює через той самий `ListAsync(spec)` без змін у репозиторії).
+
+### 10.5. Валідація, помилки, логування
+
+- **DataAnnotations** на DTO — прості правила (`Required`, `StringLength`, `Range`): некоректний запит
+  відхиляється з 400 ще до сервісу. **FluentValidation** (`Menu.Bll/Validation`) — складні правила:
+  формат slug і телефону, години роботи, ціна з ≤ 2 знаками після коми, `maxPrice ≥ minPrice`, дозволені поля
+  сортування. Валідатори реєструються `AddValidatorsFromAssemblyContaining<>()` і **викликаються явно** в сервісах
+  (без застарілого `AddFluentValidation`). Відповідь — `ValidationProblemDetails` з помилками по полях.
+- **ProblemDetails** — один глобальний `GlobalExceptionHandler`:
+  `EntityNotFoundException → 404`, `ValidationException → 400`, `ConflictException → 409`, `DomainException → 409`,
+  інше → 500 (повідомлення внутрішньої помилки — лише в Development). Виняток логується **один раз** — в обробнику
+  (вбудований лог `ExceptionHandlerMiddleware` вимкнено в `appsettings.json`).
+- **Serilog**: структуровані властивості (`CorrelationId`, `RequestPath`, `UserId`, `Service`, `StatusCode`),
+  sink — консоль, `UseSerilogRequestLogging`, SQL-команди EF Core на рівні Information
+  (`Microsoft.EntityFrameworkCore.Database.Command`). Рівні — у секції `Serilog` файлу `appsettings.json`,
+  перевизначаються змінними оточення, напр. `Serilog__MinimumLevel__Default=Warning`.
+
+### 10.6. Приклади перевірки
+
+```bash
+API=http://localhost:5090          # або адреса menu-api з Aspire Dashboard
+
+curl "$API/api/dishes?page=2&pageSize=5"                         # totalCount = 10 (усі), на сторінці 5
+curl "$API/api/dishes?search=Піца&sortBy=price&sortDir=desc"      # фільтр + сортування в SQL
+curl "$API/api/dishes?sortBy=password"                           # 400: недозволене поле сортування
+curl "$API/api/dishes/101"                                       # Eager: у лозі API один SELECT
+curl "$API/api/restaurants/1"                                    # Explicit: у лозі три SELECT
+curl -i "$API/api/dishes/999999"                                 # 404 ProblemDetails
+
+# 201 + Location, потім те саме ще раз → 409 (назва в ресторані вже зайнята)
+curl -i -X POST "$API/api/dishes" -H "Content-Type: application/json" \
+  -d '{"restaurantId":1,"name":"Деруни зі сметаною","price":135.5,"initialPortions":25,"categoryIds":[2,6]}'
+
+# 400 з помилками по полях (порожня назва, від'ємна ціна)
+curl -i -X POST "$API/api/dishes" -H "Content-Type: application/json" -d '{"restaurantId":1,"name":"","price":-5}'
+
+# 409 — правило сутності: списати порцій більше, ніж є
+curl -i -X POST "$API/api/dishes/101/portions/remove" -H "Content-Type: application/json" -d '{"quantity":999}'
+
+# 409 — ресторан зі стравами видаляти не можна
+curl -i -X DELETE "$API/api/restaurants/1"
+
+# M:N через проміжну сутність: нові «Хіти продажу» (AddedAt) і рекомендовані піци (IsFeatured)
+curl "$API/api/categories/bestseller/recent?days=120"
+curl "$API/api/categories/3/featured"
+
+# профіль ресторану: час — у форматі "HH:mm:ss"
+curl -i -X PUT "$API/api/restaurants/3/profile" -H "Content-Type: application/json" \
+  -d '{"address":"просп. Незалежності, 52","phone":"+380372555003","opensAt":"11:00:00","closesAt":"23:30:00","minOrderAmount":300}'
+```
+
+Ще більше запитів — у `Services/Menu/Menu.Api/Menu.Api.http`.
+
+### 10.7. Знімки екрана
+
+| Swagger | Пагінація | 400 з помилками валідації | SQL у лозі (eager / explicit) |
+|---------|-----------|---------------------------|-------------------------------|
+| ![](docs/screenshots/lab03-swagger.png) | ![](docs/screenshots/lab03-paging.png) | ![](docs/screenshots/lab03-validation.png) | ![](docs/screenshots/lab03-sql-log.png) |

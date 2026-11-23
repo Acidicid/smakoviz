@@ -9,4 +9,10 @@
     <Project Path="Services/Delivery/Delivery.Dal/Delivery.Dal.csproj" />
     <Project Path="Services/Delivery/Delivery.Domain/Delivery.Domain.csproj" />
   </Folder>
+  <Folder Name="/Services/Menu/">
+    <Project Path="Services/Menu/Menu.Api/Menu.Api.csproj" />
+    <Project Path="Services/Menu/Menu.Bll/Menu.Bll.csproj" />
+    <Project Path="Services/Menu/Menu.Dal/Menu.Dal.csproj" />
+    <Project Path="Services/Menu/Menu.Domain/Menu.Domain.csproj" />
+  </Folder>
 </Solution>

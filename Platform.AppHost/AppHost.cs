@@ -1,5 +1,5 @@
 // =====================================================================
-// SmakoViz · .NET Aspire AppHost — вся система однією командою.
+// SmakoViz · .NET Aspire AppHost — вся система однією командою (SQL Server + delivery-api + menu-api).
 //   dotnet run --project Platform.AppHost
 // Відкрий посилання на Dashboard з консолі: там SQL Server і delivery-api мають бути Running.
 // =====================================================================
@@ -13,7 +13,9 @@ var sql = builder.AddSqlServer("sql")
     .WithDataVolume("smakoviz-delivery-sql")
     .WithLifetime(ContainerLifetime.Persistent);   // контейнер не перестворюється при кожному запуску
 
-var deliveryDb = sql.AddDatabase("DeliveryDb", databaseName: "SmakoViz_Delivery");
+// Кожен мікросервіс — СВОЯ база (Лаб. 01), хоч і на одному сервері SQL у розробці.
+var deliveryDb = sql.AddDatabase("DeliveryDb", databaseName: "SmakoViz_Delivery");   // Проєкт №1 — ADO.NET + Dapper
+var menuDb = sql.AddDatabase("MenuDb", databaseName: "SmakoViz_Menu");               // Проєкт №2 — EF Core
 
 // Варіант 1 (без контейнера Aspire): використати вже запущену базу з Лаб. 01 (db/deploy.ps1):
 //   var deliveryDb = builder.AddConnectionString("DeliveryDb");
@@ -23,6 +25,13 @@ builder.AddProject<Projects.Delivery_Api>("delivery-api")
     .WithReference(deliveryDb)
     .WaitFor(deliveryDb)                              // API стартує, коли база готова
     .WithEnvironment("Database__Initialize", "true")  // застосувати schema/procedures/seed з Лаб. 01
+    .WithExternalHttpEndpoints();
+
+// Сервіс «Меню» (Лаб. 03): ім'я ресурсу "MenuDb" = ConnectionStrings:MenuDb у Menu.Api;
+// схему створюють міграції EF Core (MigrateAsync при старті), дані — HasData + DbInitializer.
+builder.AddProject<Projects.Menu_Api>("menu-api")
+    .WithReference(menuDb)
+    .WaitFor(menuDb)
     .WithExternalHttpEndpoints();
 
 builder.Build().Run();

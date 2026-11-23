@@ -1,0 +1,29 @@
+# SmakoViz · локальні бази для розробки (SQL Server 2022 + MongoDB 7)
+# Запуск: docker compose -f db/docker-compose.yml up -d
+# Папка db/ монтується в контейнери як /db (лише читання) — звідти виконуються скрипти.
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: smakoviz-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "SmakoViz_Dev_2026!"   # лише для локальної розробки
+      MSSQL_PID: "Developer"
+    ports:
+      - "1433:1433"
+    volumes:
+      - ./:/db:ro
+      - smakoviz-sql-data:/var/opt/mssql
+
+  mongo:
+    image: mongo:7
+    container_name: smakoviz-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./:/db:ro
+      - smakoviz-mongo-data:/data/db
+
+volumes:
+  smakoviz-sql-data:
+  smakoviz-mongo-data:

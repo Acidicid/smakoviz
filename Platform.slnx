@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Platform/">
+    <Project Path="Platform.AppHost/Platform.AppHost.csproj" />
+  </Folder>
+  <Folder Name="/Services/" />
+  <Folder Name="/Services/Delivery/">
+    <Project Path="Services/Delivery/Delivery.Api/Delivery.Api.csproj" />
+    <Project Path="Services/Delivery/Delivery.Bll/Delivery.Bll.csproj" />
+    <Project Path="Services/Delivery/Delivery.Dal/Delivery.Dal.csproj" />
+    <Project Path="Services/Delivery/Delivery.Domain/Delivery.Domain.csproj" />
+  </Folder>
+</Solution>

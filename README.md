@@ -1,7 +1,10 @@
 # SmakoViz — сервіс доставки їжі (мікросервісна платформа)
 
 Наскрізний проєкт курсу «Технології .NET у сучасній веб-інженерії».
-**Лаб. 01 — проєктування баз даних для мікросервісної архітектури.**
+| Лаба | Що зроблено | Розділ |
+|------|-------------|--------|
+| Лаб. 01 | Проєктування 3 баз: SQL (Доставка, Меню) + MongoDB (Відгуки) | [розділи 1–8](#1-предметна-область) |
+| Лаб. 02 | Мікросервіс «Доставка»: DAL (ADO.NET + Dapper, Unit of Work) → BLL → Web API, запуск через .NET Aspire | [розділ 9](#9-лаб-02--мікросервіс-доставка-dal--bll--api--aspire) |
 
 ## 1. Предметна область
 
@@ -183,6 +186,15 @@ erDiagram
 ## 5. Структура репозиторію
 
 ```
+Platform.slnx        одне рішення на всю платформу                            (Лаб. 02+)
+Directory.Build.props  спільні налаштування проєктів (.NET 9)
+Platform.AppHost/    .NET Aspire — запуск API + SQL Server однією командою    (Лаб. 02)
+Services/
+  Delivery/          мікросервіс «Доставка» = Проєкт №1 (ADO.NET + Dapper)     (Лаб. 02)
+    Delivery.Api/      контролери, Program.cs, appsettings.json, Swagger, Serilog
+    Delivery.Bll/      сервіси, DTO, профілі AutoMapper, валідація
+    Delivery.Dal/      інтерфейси й реалізації репозиторіїв, Unit of Work
+    Delivery.Domain/   моделі, доменні винятки
 README.md            опис домену, контекстів, політика дублювання, ERD, розгортання
 docs/
   contexts.md          контексти, агрегати, життєвий цикл замовлення
@@ -271,3 +283,199 @@ docker exec smakoviz-mongo mongosh --quiet /db/p3/queries.js
 - **Аудит і м'яке видалення:** `CreatedAt/CreatedBy/UpdatedAt/UpdatedBy/IsDeleted` у `Customers`, `DeliveryOrders`, `Restaurants`, `Dishes`; фільтровані індекси `WHERE IsDeleted = 0` працюють лише з «живими» рядками.
 - **Оптимістична конкурентність:** `ROWVERSION` там, де можливий паралельний запис (статус замовлення змінюють ресторан, кур'єр і клієнт; ціну страви — менеджер і адмін). Якщо версія змінилась — `usp_Order_ChangeStatus` повертає 50003 замість «тихого» перезапису.
 - **Кожен індекс — під конкретний запит**, пояснення стоїть коментарем над `CREATE INDEX` у `schema.sql`.
+
+---
+
+## 9. Лаб. 02 — мікросервіс «Доставка» (DAL → BLL → API + Aspire)
+
+Сервіс **Delivery** — самостійна вертикаль (vertical slice) поверх бази Проєкту №1 (`SmakoViz_Delivery`):
+від таблиць і процедур Лаб. 01 до REST API.
+
+### 9.1. Що потрібно для запуску
+
+| Інструмент | Навіщо |
+|------------|--------|
+| [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (або Visual Studio 2022 17.14+) | збірка й запуск (`dotnet --version` → 9.0.x) |
+| Docker Desktop (запущений) | SQL Server у контейнері для Aspire |
+
+### 9.2. Запуск однією командою через .NET Aspire
+
+```bash
+dotnet run --project Platform.AppHost
+```
+
+1. У консолі з'явиться посилання на **Aspire Dashboard** (`https://localhost:17180/login?t=...`) — відкрий його.
+2. Aspire підніме контейнер **sql** (SQL Server), створить БД `SmakoViz_Delivery`, а API при старті застосує
+   `db/p1/schema.sql → procedures.sql → seed.sql` (ідемпотентно; змінна `Database__Initialize=true`).
+3. Коли `sql`, `DeliveryDb` і `delivery-api` мають статус **Running**, натисни на адресу `delivery-api`
+   і допиши `/swagger`.
+
+Перший запуск довгий (завантаження образу SQL Server ~1,5 ГБ). Дані зберігаються у volume `smakoviz-delivery-sql`.
+
+У Visual Studio: відкрий `Platform.slnx` → правою кнопкою на `Platform.AppHost` → **Set as Startup Project** → F5.
+
+### 9.3. Запуск без Aspire (на базі з Лаб. 01)
+
+```bash
+powershell -ExecutionPolicy Bypass -File db\deploy.ps1     # SQL Server у Docker на localhost,1433 + дані
+dotnet run --project Services/Delivery/Delivery.Api       # http://localhost:5080/swagger
+```
+
+Рядок підключення — `Services/Delivery/Delivery.Api/appsettings.json` → `ConnectionStrings:DeliveryDb`.
+Перевизначається змінною оточення (подвійне підкреслення замість двокрапки):
+
+```powershell
+$env:ConnectionStrings__DeliveryDb = "Server=...;Database=SmakoViz_Delivery;..."
+```
+
+### 9.4. Схема рішення
+
+```mermaid
+flowchart LR
+    Client([Swagger / curl]) --> Api
+    subgraph Delivery service
+        Api["Delivery.Api<br/>контролери, ProblemDetails,<br/>Swagger, Serilog"] --> Bll["Delivery.Bll<br/>сервіси, DTO, AutoMapper"]
+        Bll --> Dal["Delivery.Dal<br/>репозиторії, Unit of Work"]
+        Domain["Delivery.Domain<br/>моделі, винятки"]
+        Bll -.-> Domain
+        Dal -.-> Domain
+    end
+    Dal --> Db[(SQL Server<br/>SmakoViz_Delivery)]
+    AppHost["Platform.AppHost<br/>.NET Aspire"] -. запускає .-> Api
+    AppHost -. запускає .-> Db
+```
+
+Залежності лише в один бік: **Api → Bll → Dal**, `Domain` підключають і Dal, і Bll.
+Посилання Api → Dal потрібне тільки `Program.cs` (composition root), щоб зареєструвати `UnitOfWork` у DI;
+контролери працюють лише з сервісами BLL і ніколи не бачать репозиторіїв. Увесь SQL — тільки в `Delivery.Dal`.
+
+**DI** (`Program.cs`): `IUnitOfWork` — **Scoped** (одне з'єднання на HTTP-запит), сервіси BLL — **Scoped**,
+AutoMapper з профілем `DeliveryProfile`, логування — **Serilog**. Рядок підключення — `appsettings.json` →
+`ConnectionStrings:DeliveryDb`.
+
+| Шар | Що всередині |
+|-----|--------------|
+| `Delivery.Domain` | `Customer`, `Dish`, `DeliveryOrder` (+ `DeliveryDetails`, `OrderLine`, `OrderStatusChange`), `OrderStatus`, `PagedResult<T>`; винятки `NotFoundException`, `BusinessConflictException`, `ConcurrencyConflictException`, `BusinessRuleException`, `ValidationException` |
+| `Delivery.Dal` | `IGenericRepository<T>` → `BaseDapperRepository<T>` (спільний CRUD один раз); **`CustomerRepository` — чистий ADO.NET** (свідомо без Generic Repository); **`DishRepository`, `OrderRepository` — ADO.NET + Dapper** (multi-mapping, `QueryMultiple`, процедури Лаб. 01); `UnitOfWork`; `SqlErrorTranslator`; `DatabaseInitializer` |
+| `Delivery.Bll` | `CustomerService`, `DishService`, `OrderService`; DTO (records + DataAnnotations); профіль `DeliveryProfile` (AutoMapper) |
+| `Delivery.Api` | `CustomersController`, `DishesController`, `OrdersController` (attribute routing, async, `CancellationToken`); `DomainExceptionHandler` (ProblemDetails); `CorrelationIdMiddleware`; Swagger; Serilog |
+| `Platform.AppHost` | Aspire: `sql` (SQL Server + volume) → база `DeliveryDb` → `delivery-api` |
+
+### 9.5. Транзакційна операція: оформлення замовлення
+
+`POST /api/orders` → `OrderService.PlaceOrderAsync` — **одна транзакція на три репозиторії**:
+
+```
+BEGIN TRAN (READ COMMITTED)
+  1. Customers.ExistsAsync          ADO.NET   клієнт існує?                    → інакше 400
+  2. Dishes.GetByIdsAsync           Dapper    ціни з копії Меню, один ресторан  → інакше 400 / 422
+  3. Orders.AddAsync                Dapper    usp_Order_Create: шапка + деталі + історія
+  4. Orders.AddLineAsync × N        Dapper    usp_Order_AddLine: ЗНІМОК назви й ціни, перерахунок суми
+COMMIT   — або ROLLBACK, якщо будь-який крок впав
+```
+
+Вартість доставки рахує BLL: 0 ₴ від 500 ₴, інакше 40 ₴.
+
+**Перевірка відкату:** замов страву `303` («Місо-суп», у seed `IsAvailable = 0`) разом із `301`.
+Позиція 301 і саме замовлення вже записані, але `usp_Order_AddLine` для 303 кидає `THROW 50004` →
+`BusinessRuleException` → **422**, і `ROLLBACK` прибирає все: у `GET /api/orders` нового замовлення немає.
+
+Як Unit of Work тримає все в одній транзакції: репозиторії створюються всередині `UnitOfWork` і отримують
+**те саме** `SqlConnection` та функцію `() => _transaction`, тому кожна команда автоматично йде в поточну транзакцію.
+
+**Рівень ізоляції — READ COMMITTED, таймаут команди — 30 с.** Компроміс *deadlocks vs consistency*:
+SERIALIZABLE прибрав би більше аномалій читання, але тримав би діапазонні блокування й частіше ловив deadlock.
+Нам вистачає READ COMMITTED, бо критичний рядок (замовлення) процедури блокують точково (`UPDLOCK`),
+а паралельні зміни ловить `ROWVERSION` (оптимістична конкурентність → 409).
+
+### 9.6. Від процедури до HTTP-статусу
+
+| Звідки | DAL (`SqlErrorTranslator`) | BLL / API | HTTP |
+|--------|----------------------------|-----------|------|
+| `THROW 50001` (не знайдено) | `NotFoundException` | | **404** |
+| `THROW 50002` (недопустимий перехід статусу) | `BusinessConflictException` | | **409** |
+| `THROW 50003` (RowVersion змінився) | `ConcurrencyConflictException` | | **409** |
+| `THROW 50004` (бізнес-правило) | `BusinessRuleException` | | **422** |
+| SQL 2601 / 2627 (UNIQUE) | `BusinessConflictException` | | **409** |
+| DataAnnotations на DTO | | `[ApiController]` | **400** |
+| бізнес-валідація (клієнт не існує, кривий RowVersion) | | `ValidationException` | **400** |
+| будь-що інше | | без деталей | **500** |
+
+Перетворення робить **один** глобальний `DomainExceptionHandler` (`IExceptionHandler`), а не try/catch у кожному
+контролері. Відповідь завжди у форматі **ProblemDetails** (RFC 9457) з `traceId`.
+
+### 9.7. Ендпоінти
+
+| Метод | Шлях | Успіх | Помилки |
+|-------|------|-------|---------|
+| GET | `/api/customers?q=&page=&pageSize=` | 200 | 400 |
+| GET | `/api/customers/{id}` | 200 | 404 |
+| POST | `/api/customers` | 201 + Location | 400, 409 |
+| PUT | `/api/customers/{id}` (з `rowVersion`) | 200 | 400, 404, 409 |
+| DELETE | `/api/customers/{id}` | 204 | 404 |
+| GET | `/api/dishes?restaurantId=&onlyAvailable=` | 200 | 400 |
+| GET | `/api/dishes/{id}` | 200 | 404 |
+| PUT | `/api/dishes/{id}` (синхронізація копії з Меню) | 200 | 400 |
+| GET | `/api/orders?customerId=&status=&page=&pageSize=` | 200 | 400 |
+| GET | `/api/orders/{id}` | 200 | 404 |
+| POST | `/api/orders` (заголовок `Idempotency-Key` — необов'язковий) | 201 + Location / 200 для повтору | 400, 422 |
+| POST | `/api/orders/{id}/lines` | 200 | 400, 404, 422 |
+| POST | `/api/orders/{id}/confirm` | 204 | 404, 409, 422 |
+| POST | `/api/orders/{id}/cancel` | 204 | 404, 409 |
+| POST | `/api/orders/{id}/status` | 204 | 400, 404, 409 |
+| DELETE | `/api/orders/{id}` (лише Delivered/Cancelled) | 204 | 404, 422 |
+
+Повний опис DTO і статусів — у **Swagger** (`/swagger`). Готові запити — у `Services/Delivery/Delivery.Api/Delivery.Api.http`.
+
+### 9.8. Приклади перевірки (curl)
+
+Підстав адресу API з Aspire Dashboard (або `http://localhost:5080` без Aspire):
+
+```bash
+API=http://localhost:5080
+
+# 200 — замовлення з seed Лаб. 01 (SV-000001) з позиціями та історією статусів
+curl $API/api/orders/1
+
+# 404 ProblemDetails, а не 500
+curl -i $API/api/orders/999999
+
+# 201 + Location — оформлення замовлення (транзакція)
+curl -i -X POST $API/api/orders -H "Content-Type: application/json" -H "Idempotency-Key: demo-001" \
+  -d '{"customerId":2,"restaurantName":"Буковинська хата","address":"м. Чернівці, вул. Руська, 5","contactPhone":"+380672223344","items":[{"dishId":101,"quantity":1},{"dishId":102,"quantity":2}]}'
+
+# той самий Idempotency-Key ще раз → 200 і те саме замовлення (друге не створюється)
+
+# 422 + ВІДКАТ — страва 303 недоступна; замовлення не з'являється
+curl -i -X POST $API/api/orders -H "Content-Type: application/json" \
+  -d '{"customerId":3,"restaurantName":"Суші Дзен","address":"м. Чернівці, просп. Незалежності, 101","contactPhone":"+380935554466","items":[{"dishId":301,"quantity":1},{"dishId":303,"quantity":1}]}'
+
+# 204, потім 409 — підтвердження SV-000004 і повторне підтвердження
+curl -i -X POST $API/api/orders/4/confirm
+curl -i -X POST $API/api/orders/4/confirm
+
+# 409 — недопустимий перехід: доставлене замовлення не можна знову відправити кур'єром
+curl -i -X POST $API/api/orders/1/status -H "Content-Type: application/json" -d '{"status":"OnTheWay"}'
+
+# 201 — ім'я з апострофом: параметри, а не конкатенація, тож SQL не ламається
+curl -i -X POST $API/api/customers -H "Content-Type: application/json" \
+  -d '{"email":"sean.obrien@example.com","fullName":"Sean O'"'"'Brien","phone":"+380991234567"}'
+
+# 400 ValidationProblemDetails — невалідний email і порожнє ім'я
+curl -i -X POST $API/api/customers -H "Content-Type: application/json" -d '{"email":"bad","fullName":""}'
+```
+
+### 9.9. Безпека запитів і з'єднань
+
+- **Жодної конкатенації значень у SQL**: ADO.NET — `command.Parameters.Add("@Id", SqlDbType.BigInt)`, Dapper — анонімні
+  об'єкти / `DynamicParameters`, списки — `WHERE Id IN @Ids`. Ім'я таблиці в `BaseDapperRepository<T>` — константа з коду.
+- `LIKE`-пошук екранує `%`, `_`, `[`.
+- З'єднання, команди й рідери звільняються через `await using`; пул підключень SqlClient увімкнений за замовчуванням.
+- «Сирі» SQL-повідомлення не потрапляють у відповідь: `SqlErrorTranslator` → доменні винятки → ProblemDetails.
+- Логи (Serilog) мають `CorrelationId` (заголовок `X-Correlation-Id`) і не містять паролів чи рядків підключення.
+
+### 9.10. Знімки екрана
+
+| Swagger | Aspire Dashboard |
+|---------|------------------|
+| ![Swagger](docs/screenshots/lab02-swagger.png) | ![Aspire Dashboard](docs/screenshots/lab02-aspire-dashboard.png) |

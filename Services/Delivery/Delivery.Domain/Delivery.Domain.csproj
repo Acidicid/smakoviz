@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Спільні моделі, доменні винятки й константи. Не залежить ні від чого:
+       його підключають і Delivery.Dal, і Delivery.Bll. -->
+</Project>

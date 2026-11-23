@@ -14,9 +14,9 @@ echo "1) Запускаю контейнери SQL Server і MongoDB..."
 docker compose -f docker-compose.yml up -d
 
 echo "2) Чекаю, поки SQL Server буде готовий (до 2 хв)..."
-for i in $(seq 1 40); do
+for i in $(seq 1 60); do
   if docker exec smakoviz-sql $SQLCMD -C -S localhost -U sa -P "$PASSWORD" -Q "SELECT 1" >/dev/null 2>&1; then break; fi
-  [ "$i" -eq 40 ] && { echo "SQL Server не стартував: docker logs smakoviz-sql"; exit 1; }
+  [ "$i" -eq 60 ] && { echo "SQL Server не стартував: docker logs smakoviz-sql"; exit 1; }
   sleep 3
 done
 

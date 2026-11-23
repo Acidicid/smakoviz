@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- .NET Aspire AppHost: описує ВСІ ресурси платформи (поки що: SQL Server + Delivery API)
+       і запускає їх однією командою (dotnet run у цій папці або F5 у Visual Studio).
+       Потрібен запущений Docker Desktop: SQL Server стартує в контейнері. -->
+
+  <Sdk Name="Aspire.AppHost.Sdk" Version="9.5.0" />
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsAspireHost>true</IsAspireHost>
+    <!-- тут Aspire зберігає згенерований пароль SQL Server (user secrets) -->
+    <UserSecretsId>smakoviz-platform-apphost</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" Version="9.5.0" />
+    <PackageReference Include="Aspire.Hosting.SqlServer" Version="9.5.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Services\Delivery\Delivery.Api\Delivery.Api.csproj" />
+  </ItemGroup>
+</Project>

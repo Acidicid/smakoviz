@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Business Logic Layer: сервіси, DTO, профілі AutoMapper.
+       Єдиний власник бізнес-правил. SQL тут немає — лише виклики Unit of Work і репозиторіїв. -->
+
+  <ItemGroup>
+    <!-- AutoMapper 15+: Community-ліцензія (безкоштовно для навчання);
+         ключ з automapper.io кладеться в AutoMapper:LicenseKey, без нього — лише попередження в лозі -->
+    <PackageReference Include="AutoMapper" Version="15.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Delivery.Dal\Delivery.Dal.csproj" />
+    <ProjectReference Include="..\Delivery.Domain\Delivery.Domain.csproj" />
+  </ItemGroup>
+</Project>

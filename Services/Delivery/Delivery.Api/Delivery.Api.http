@@ -1,0 +1,60 @@
+### SmakoViz Delivery API — ручні запити (Visual Studio / VS Code REST Client / Rider)
+@api = http://localhost:5080
+
+### Замовлення з Лаб. 01 (seed): SV-000001 = Id 1
+GET {{api}}/api/orders/1
+
+### Неіснуючий Id → 404 ProblemDetails
+GET {{api}}/api/orders/999999
+
+### Пошук замовлень клієнта
+GET {{api}}/api/orders?customerId=1&page=1&pageSize=10
+
+### Оформити замовлення (транзакція) → 201 + Location
+POST {{api}}/api/orders
+Content-Type: application/json
+Idempotency-Key: demo-order-001
+
+{
+  "customerId": 2,
+  "restaurantName": "Буковинська хата",
+  "address": "м. Чернівці, вул. Руська, 5",
+  "contactPhone": "+380672223344",
+  "items": [
+    { "dishId": 101, "quantity": 1 },
+    { "dishId": 102, "quantity": 2, "comment": "Сметану окремо" }
+  ]
+}
+
+### Транзакція з відкатом: 303 «Місо-суп» недоступний → 422, замовлення НЕ створюється
+POST {{api}}/api/orders
+Content-Type: application/json
+
+{
+  "customerId": 3,
+  "restaurantName": "Суші Дзен",
+  "address": "м. Чернівці, просп. Незалежності, 101",
+  "contactPhone": "+380935554466",
+  "items": [
+    { "dishId": 301, "quantity": 1 },
+    { "dishId": 303, "quantity": 1 }
+  ]
+}
+
+### Підтвердити SV-000004 (Id 4) → 204
+POST {{api}}/api/orders/4/confirm
+
+### Повторне підтвердження → 409 ProblemDetails
+POST {{api}}/api/orders/4/confirm
+
+### Спецсимволи (O'Brien) — SQL-ін'єкції немає, параметри
+POST {{api}}/api/customers
+Content-Type: application/json
+
+{ "email": "sean.obrien@example.com", "fullName": "Sean O'Brien", "phone": "+380991234567" }
+
+### Невалідний вхід → 400 ValidationProblemDetails
+POST {{api}}/api/customers
+Content-Type: application/json
+
+{ "email": "not-an-email", "fullName": "" }

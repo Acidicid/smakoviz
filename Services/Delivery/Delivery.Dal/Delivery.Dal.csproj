@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Data Access Layer: УВЕСЬ SQL живе тільки тут.
+       Репозиторії (1 × чистий ADO.NET, 2 × ADO.NET + Dapper) і Unit of Work. -->
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.*" />
+    <PackageReference Include="Dapper" Version="2.1.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Delivery.Domain\Delivery.Domain.csproj" />
+  </ItemGroup>
+
+  <!-- SQL-скрипти з Лаб. 01 вбудовуються в збірку (без копіювання файлів):
+       DatabaseInitializer виконує їх при першому запуску, якщо бази ще немає
+       (потрібно для запуску через Aspire з порожнім контейнером SQL Server). -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\..\db\p1\schema.sql" LogicalName="DbScripts.01_schema.sql" />
+    <EmbeddedResource Include="..\..\..\db\p1\procedures.sql" LogicalName="DbScripts.02_procedures.sql" />
+    <EmbeddedResource Include="..\..\..\db\p1\seed.sql" LogicalName="DbScripts.03_seed.sql" />
+  </ItemGroup>
+</Project>

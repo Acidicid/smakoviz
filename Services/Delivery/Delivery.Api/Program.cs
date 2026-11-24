@@ -1,8 +1,10 @@
 using Delivery.Api.Infrastructure;
+using Delivery.Bll.Caching;
 using Delivery.Bll.Mapping;
 using Delivery.Bll.Services;
 using Delivery.Dal.Abstractions;
 using Delivery.Dal.Infrastructure;
+using Delivery.Grpc;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,8 +24,33 @@ builder.Services.AddScoped<IUnitOfWork>(_ => new UnitOfWork(connectionString));
 
 // Сервіси BLL — теж Scoped, бо залежать від Scoped Unit of Work.
 builder.Services.AddScoped<ICustomerService, CustomerService>();
-builder.Services.AddScoped<IDishService, DishService>();
-builder.Services.AddScoped<IOrderService, OrderService>();
+// Лаб. 06: читання страв і замовлень — через кешовані декоратори (Delivery.Bll/Caching)
+builder.Services.AddScoped<DishService>();
+builder.Services.AddScoped<OrderService>();
+builder.Services.AddScoped<IDishService, CachedDishService>();
+builder.Services.AddScoped<IOrderService, CachedOrderService>();
+
+// ---------- Лаб. 06: кешування L1 (пам'ять, обмежений розмір) + L2 (Redis через Aspire) ----------
+builder.Services.AddMemoryCache(options =>
+{
+    options.SizeLimit = 10_000;          // кожен запис Size = 1
+    options.CompactionPercentage = 0.25; // при переповненні витісняється 25 % (спершу Low-пріоритет)
+    options.TrackStatistics = true;
+});
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
+    builder.AddRedisDistributedCache("redis");   // ConnectionStrings:redis від AppHost
+else
+    builder.Services.AddDistributedMemoryCache();  // запуск без Aspire
+builder.Services.AddSingleton<CacheMetrics>();
+builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
+builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache");
+
+// ---------- Лаб. 06: gRPC + серверний interceptor логування (зі ServiceDefaults) ----------
+builder.Services.AddGrpc(options =>
+{
+    options.Interceptors.Add<GrpcLoggingInterceptor>();
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
 
 // AutoMapper: профілі зібрані централізовано в Delivery.Bll/Mapping
 builder.Services.AddAutoMapper(cfg =>
@@ -64,6 +91,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapGrpcService<DeliveryGrpcService>();   // Лаб. 06: Protos/delivery.proto
 app.MapDefaultEndpoints();   // /health і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

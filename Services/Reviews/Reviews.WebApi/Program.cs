@@ -1,4 +1,6 @@
 using Reviews.Application;
+using Reviews.Application.Caching;
+using Reviews.Grpc;
 using Reviews.Application.Common.Mappings;
 using Reviews.Infrastructure;
 using Reviews.WebApi.Infrastructure;
@@ -28,6 +30,26 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
     ctx.ProblemDetails.Extensions["traceId"] = ctx.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
+// ---------- Лаб. 06: кешування L1 (IMemoryCache) + L2 (Redis) — ITwoLevelCache реєструє AddApplication ----------
+builder.Services.AddMemoryCache(options =>
+{
+    options.SizeLimit = 10_000;          // кожен запис Size = 1
+    options.CompactionPercentage = 0.25;
+    options.TrackStatistics = true;
+});
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
+    builder.AddRedisDistributedCache("redis");   // ConnectionStrings:redis від AppHost
+else
+    builder.Services.AddDistributedMemoryCache();
+builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache");
+
+// ---------- Лаб. 06: gRPC + серверний interceptor логування ----------
+builder.Services.AddGrpc(options =>
+{
+    options.Interceptors.Add<GrpcLoggingInterceptor>();
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
+
 // ---------- Health check MongoDB (входить у /health зі ServiceDefaults) ----------
 builder.Services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
 
@@ -55,6 +77,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapGrpcService<ReviewsGrpcService>();   // Лаб. 06: Protos/reviews.proto
 app.MapDefaultEndpoints();   // /health (у т.ч. mongodb) і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

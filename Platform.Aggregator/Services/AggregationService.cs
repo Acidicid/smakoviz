@@ -1,51 +1,153 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using System.Text.Json;
+using Grpc.Core;
+using Microsoft.Extensions.Caching.Distributed;
 using Platform.Aggregator.Clients;
 using Platform.Aggregator.Models;
 
 namespace Platform.Aggregator.Services;
 
+/// <summary>Результат агрегації + звідки він (кеш чи свіжа збірка) — для заголовка X-Cache.</summary>
+public sealed record AggregationResult<T>(T Value, bool FromCache, long ElapsedMs);
+
 /// <summary>
 /// Aggregator Pattern. Аналогія: офіціант, який замість трьох походів (на кухню, до бару, до каси)
 /// одночасно відправляє три записки й приносить усе на одній таці. Якщо бар зачинений — несе їжу
 /// й чек, а на таці записка «напої тимчасово недоступні» (Warnings), а не повертається з порожніми руками (500).
+/// Лаб. 06: записки тепер ідуть gRPC (одне HTTP/2-з'єднання на кухню), а готову тацю на 30–60 с
+/// ставимо на «полицю видачі» (Redis), щоб наступний такий самий запит не смикав кухні взагалі.
 /// </summary>
 public sealed class AggregationService(
-    DeliveryClient delivery,
-    MenuClient menu,
-    ReviewsClient reviews,
+    GrpcPlatformClient grpc,
+    HttpPlatformClient http,
+    IDistributedCache cache,
+    AggregatorMetrics metrics,
     ILogger<AggregationService> logger)
 {
     public static readonly ActivitySource ActivitySource = new("SmakoViz.Aggregator");
+
     private const int LatestReviewsCount = 3;
+    private const string DeliveryService = "delivery-api";
+    private const string MenuService = "menu-api";
+    private const string ReviewsService = "reviews-api";
+
+    // Агрегований кеш живе КОРОТШЕ за кеші сервісів (замовлення 60 с, меню 10 хв),
+    // інакше зібрана відповідь виглядала б «свіжішою» за дані, з яких її зібрано.
+    private static readonly TimeSpan FullOrderTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan RestaurantTtl = TimeSpan.FromSeconds(60);
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    public static string FullOrderKey(long orderId) => $"aggregator:order:{orderId}:full";
+    public static string RestaurantKey(long restaurantId) => $"aggregator:restaurant:{restaurantId}";
+
+    // ------------------------------------------------------------------ публічні сценарії (з кешем Redis)
+
+    public Task<AggregationResult<FullOrderDto>?> GetFullOrderAsync(long orderId, Transport transport, bool useCache, CancellationToken ct)
+        => WithCacheAsync(FullOrderKey(orderId), FullOrderTtl, "full-order", transport, useCache,
+            client => ComposeFullOrderAsync(client, orderId, ct), r => r.Warnings.Count == 0, ct);
+
+    public Task<AggregationResult<RestaurantOverviewDto>?> GetRestaurantOverviewAsync(long restaurantId, Transport transport,
+        bool useCache, CancellationToken ct)
+        => WithCacheAsync(RestaurantKey(restaurantId), RestaurantTtl, "restaurant-overview", transport, useCache,
+            client => ComposeRestaurantOverviewAsync(client, restaurantId, ct), r => r.Warnings.Count == 0, ct);
+
+    /// <summary>
+    /// Cache-aside для агрегованої відповіді: ключ із параметрів запиту, перевірка ДО паралельних викликів,
+    /// часткові відповіді (є Warnings) НЕ кешуються. Недоступний Redis не ламає запит — просто збираємо заново.
+    /// </summary>
+    private async Task<AggregationResult<T>?> WithCacheAsync<T>(string key, TimeSpan ttl, string scenario, Transport transport,
+        bool useCache, Func<IPlatformClient, Task<T?>> compose, Func<T, bool> cacheable, CancellationToken ct) where T : class
+    {
+        var sw = Stopwatch.StartNew();
+
+        if (useCache && await TryGetCachedAsync<T>(key, ct) is { } cached)
+        {
+            metrics.CacheHit();
+            metrics.RecordRequest(scenario, transport, fromCache: true, sw.Elapsed.TotalMilliseconds);
+            logger.LogInformation("Aggregator cache hit {CacheKey}", key);
+            return new AggregationResult<T>(cached, true, sw.ElapsedMilliseconds);
+        }
+        if (useCache)
+        {
+            metrics.CacheMiss();
+            logger.LogInformation("Aggregator cache miss {CacheKey}", key);
+        }
+
+        var client = transport == Transport.Http ? (IPlatformClient)http : grpc;
+        var result = await compose(client);
+        sw.Stop();
+        metrics.RecordRequest(scenario, transport, fromCache: false, sw.Elapsed.TotalMilliseconds);
+        logger.LogInformation("Aggregated {Scenario} via {Transport} in {ElapsedMs} ms", scenario, transport, sw.ElapsedMilliseconds);
+
+        if (result is null)
+            return null;
+
+        if (useCache && cacheable(result))
+            await TrySetCachedAsync(key, result, ttl, ct);
+        else if (useCache)
+            logger.LogInformation("Partial response for {CacheKey} is not cached", key);
+
+        return new AggregationResult<T>(result, false, sw.ElapsedMilliseconds);
+    }
+
+    private async Task<T?> TryGetCachedAsync<T>(string key, CancellationToken ct) where T : class
+    {
+        try
+        {
+            var bytes = await cache.GetAsync(key, ct).WaitAsync(TimeSpan.FromSeconds(1), ct);
+            return bytes is null ? null : JsonSerializer.Deserialize<T>(bytes, Json);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Redis unavailable while reading {CacheKey}; composing without cache", key);
+            return null;
+        }
+    }
+
+    private async Task TrySetCachedAsync<T>(string key, T value, TimeSpan ttl, CancellationToken ct)
+    {
+        try
+        {
+            await cache.SetAsync(key, JsonSerializer.SerializeToUtf8Bytes(value, Json),
+                new DistributedCacheEntryOptions { AbsoluteExpirationRelativeToNow = ttl }, ct).WaitAsync(TimeSpan.FromSeconds(1), ct);
+            logger.LogInformation("Aggregator cached {CacheKey} for {Ttl}", key, ttl);
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Redis unavailable while writing {CacheKey}", key);
+        }
+    }
+
+    // ------------------------------------------------------------------ композиція
 
     /// <summary>
     /// Повна картка замовлення: замовлення (delivery-api) → ПАРАЛЕЛЬНО ресторан з актуальним меню (menu-api),
-    /// рейтинг ресторану і відгуки цього клієнта (reviews-api).
-    /// null — замовлення не знайдене (без нього агрегувати нічого).
+    /// рейтинг ресторану і відгуки цього клієнта (reviews-api). null — замовлення не знайдене.
     /// </summary>
-    public async Task<FullOrderDto?> GetFullOrderAsync(long orderId, CancellationToken ct)
+    private async Task<FullOrderDto?> ComposeFullOrderAsync(IPlatformClient client, long orderId, CancellationToken ct)
     {
         using var activity = ActivitySource.StartActivity("AggregateFullOrder");
         activity?.SetTag("order.id", orderId);
+        activity?.SetTag("aggregator.transport", client.Transport.ToString());
 
         var warnings = new List<string>();
 
-        // 1) замовлення — обов'язкове; якщо delivery-api недоступний, повертаємо 503 у контролері
-        var order = await SafeAsync(DeliveryClient.ServiceName, $"order {orderId}",
-            () => delivery.GetOrderAsync(orderId, ct), warnings);
+        // 1) замовлення — обов'язкове; якщо delivery-api недоступний → 503
+        var order = await SafeAsync(DeliveryService, $"order {orderId}", () => client.GetOrderAsync(orderId, ct), warnings, ct);
         if (order is null)
         {
-            if (warnings.Count > 0) throw new DependencyUnavailableException(DeliveryClient.ServiceName);
+            if (warnings.Count > 0) throw new DependencyUnavailableException(DeliveryService);
             return null;
         }
 
-        // 2) незалежні виклики — одночасно (Task.WhenAll), CancellationToken передається в кожен
-        var restaurantTask = SafeAsync(MenuClient.ServiceName, $"restaurant {order.RestaurantId}",
-            () => menu.GetRestaurantAsync(order.RestaurantId, onlyAvailable: false, ct), warnings);
-        var ratingTask = SafeAsync(ReviewsClient.ServiceName, $"rating of restaurant {order.RestaurantId}",
-            () => reviews.GetRestaurantRatingAsync(order.RestaurantId, ct), warnings);
-        var reviewsTask = SafeAsync(ReviewsClient.ServiceName, $"reviews of customer {order.CustomerId}",
-            () => reviews.GetForCustomerAsync(order.RestaurantId, order.CustomerId, ct), warnings);
+        // 2) незалежні виклики — одночасно (Task.WhenAll), CancellationToken у кожному
+        var restaurantTask = SafeAsync(MenuService, $"restaurant {order.RestaurantId}",
+            () => client.GetRestaurantAsync(order.RestaurantId, onlyAvailable: false, ct), warnings, ct);
+        var ratingTask = SafeAsync(ReviewsService, $"rating of restaurant {order.RestaurantId}",
+            () => client.GetRestaurantRatingAsync(order.RestaurantId, ct), warnings, ct);
+        var reviewsTask = SafeAsync(ReviewsService, $"reviews of customer {order.CustomerId}",
+            () => client.GetCustomerReviewsAsync(order.RestaurantId, order.CustomerId, ct), warnings, ct);
 
         await Task.WhenAll(restaurantTask, ratingTask, reviewsTask);
 
@@ -53,7 +155,7 @@ public sealed class AggregationService(
         var rating = await ratingTask;
         var customerReviews = await reviewsTask ?? [];
 
-        // 3) узгодженість: беремо лише страви, що є в ЦЬОМУ замовленні, і відгуки саме на них / на цей ресторан
+        // 3) узгодженість: лише страви ЦЬОГО замовлення і відгуки саме на них / на цей ресторан
         var orderDishIds = order.Lines.Select(l => l.DishId).ToHashSet();
         var dishes = restaurant?.Dishes.Where(d => orderDishIds.Contains(d.Id)).ToDictionary(d => d.Id)
                      ?? new Dictionary<long, MenuDishDto>();
@@ -62,7 +164,7 @@ public sealed class AggregationService(
             .ToList();
 
         if (restaurant is not null && restaurant.Id != order.RestaurantId)
-            lock (warnings) warnings.Add($"{MenuClient.ServiceName} returned restaurant {restaurant.Id} instead of {order.RestaurantId}");
+            lock (warnings) warnings.Add($"{MenuService} returned restaurant {restaurant.Id} instead of {order.RestaurantId}");
 
         var items = order.Lines.Select(line =>
         {
@@ -89,23 +191,21 @@ public sealed class AggregationService(
             warnings);
     }
 
-    /// <summary>
-    /// Картка ресторану: меню (menu-api) + рейтинг + останні 3 відгуки (reviews-api) — усі три виклики паралельно.
-    /// null — ресторан не знайдено.
-    /// </summary>
-    public async Task<RestaurantOverviewDto?> GetRestaurantOverviewAsync(long restaurantId, CancellationToken ct)
+    /// <summary>Картка ресторану: меню + рейтинг + останні 3 відгуки — три виклики паралельно. null — ресторану немає.</summary>
+    private async Task<RestaurantOverviewDto?> ComposeRestaurantOverviewAsync(IPlatformClient client, long restaurantId, CancellationToken ct)
     {
         using var activity = ActivitySource.StartActivity("AggregateRestaurantOverview");
         activity?.SetTag("restaurant.id", restaurantId);
+        activity?.SetTag("aggregator.transport", client.Transport.ToString());
 
         var warnings = new List<string>();
 
-        var restaurantTask = SafeAsync(MenuClient.ServiceName, $"restaurant {restaurantId}",
-            () => menu.GetRestaurantAsync(restaurantId, onlyAvailable: true, ct), warnings);
-        var ratingTask = SafeAsync(ReviewsClient.ServiceName, $"rating of restaurant {restaurantId}",
-            () => reviews.GetRestaurantRatingAsync(restaurantId, ct), warnings);
-        var latestTask = SafeAsync(ReviewsClient.ServiceName, $"latest reviews of restaurant {restaurantId}",
-            () => reviews.GetLatestForRestaurantAsync(restaurantId, LatestReviewsCount, ct), warnings);
+        var restaurantTask = SafeAsync(MenuService, $"restaurant {restaurantId}",
+            () => client.GetRestaurantAsync(restaurantId, onlyAvailable: true, ct), warnings, ct);
+        var ratingTask = SafeAsync(ReviewsService, $"rating of restaurant {restaurantId}",
+            () => client.GetRestaurantRatingAsync(restaurantId, ct), warnings, ct);
+        var latestTask = SafeAsync(ReviewsService, $"latest reviews of restaurant {restaurantId}",
+            () => client.GetLatestReviewsAsync(restaurantId, LatestReviewsCount, ct), warnings, ct);
 
         await Task.WhenAll(restaurantTask, ratingTask, latestTask);
 
@@ -115,9 +215,9 @@ public sealed class AggregationService(
 
         if (restaurant is null)
         {
-            // menu-api живий, але ресторану немає → 404; menu-api недоступний → 503 (без нього картки не буде)
-            if (warnings.Any(w => w.StartsWith(MenuClient.ServiceName)))
-                throw new DependencyUnavailableException(MenuClient.ServiceName);
+            // menu-api живий, але ресторану немає → 404; menu-api недоступний → 503
+            if (warnings.Any(w => w.StartsWith(MenuService)))
+                throw new DependencyUnavailableException(MenuService);
             return null;
         }
 
@@ -134,11 +234,12 @@ public sealed class AggregationService(
     // ------------------------------------------------------------------ виклики з логуванням і частковими відмовами
 
     /// <summary>
-    /// Виклик сервісу з логуванням тривалості. Недоступність (HttpRequestException, таймаут, circuit breaker)
-    /// НЕ валить запит: повертається default, а в warnings додається повідомлення.
-    /// Скасування клієнтом (ct) не ковтається — пробрасується далі.
+    /// Виклик сервісу з логуванням тривалості. Недоступність НЕ валить запит: повертається default,
+    /// а в warnings додається повідомлення. gRPC: RpcException Unavailable / DeadlineExceeded (а також Internal,
+    /// Unknown, ResourceExhausted — сервіс зламався); HTTP: HttpRequestException, таймаут, circuit breaker.
+    /// Скасування самим клієнтом (ct) не ковтається.
     /// </summary>
-    private async Task<T?> SafeAsync<T>(string service, string what, Func<Task<T?>> call, List<string> warnings)
+    private async Task<T?> SafeAsync<T>(string service, string what, Func<Task<T?>> call, List<string> warnings, CancellationToken ct)
     {
         logger.LogInformation("Calling {Service} for {What}", service, what);
         var sw = Stopwatch.StartNew();
@@ -148,13 +249,26 @@ public sealed class AggregationService(
             logger.LogInformation("{Service} responded in {ElapsedMs} ms for {What}", service, sw.ElapsedMilliseconds, what);
             return result;
         }
-        catch (Exception ex) when (ex is HttpRequestException
-                                       or TimeoutException
-                                       or System.Text.Json.JsonException
-                                       or Polly.ExecutionRejectedException   // таймаут / розімкнений circuit breaker
-                                       or TaskCanceledException { CancellationToken.IsCancellationRequested: false })
+        catch (RpcException ex) when (!ct.IsCancellationRequested && ex.StatusCode is StatusCode.Unavailable
+                                          or StatusCode.DeadlineExceeded or StatusCode.Internal
+                                          or StatusCode.Unknown or StatusCode.ResourceExhausted or StatusCode.Cancelled)
         {
-            logger.LogWarning(ex, "{Service} is unavailable for {What} after {ElapsedMs} ms", service, what, sw.ElapsedMilliseconds);
+            return Degrade(ex, $"{ex.StatusCode}");
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested && ex is HttpRequestException
+                                       or TimeoutException
+                                       or JsonException
+                                       or Polly.ExecutionRejectedException   // таймаут / розімкнений circuit breaker
+                                       or TaskCanceledException)
+        {
+            return Degrade(ex, ex.GetType().Name);
+        }
+
+        T? Degrade(Exception ex, string reason)
+        {
+            logger.LogWarning(ex, "{Service} is unavailable for {What} after {ElapsedMs} ms: {Reason}",
+                service, what, sw.ElapsedMilliseconds, reason);
+            metrics.PartialFailure(service);
             lock (warnings) warnings.Add($"{service} is unavailable: {what} not loaded");
             return default;
         }
@@ -177,6 +291,39 @@ public sealed class AggregationService(
 
     private static ReviewCardDto ToReviewCard(ReviewItemDto r)
         => new(r.Id, r.TargetType, r.DishName, r.AuthorName, r.Rating, r.Text, r.CreatedAt);
+}
+
+/// <summary>
+/// Метрики Aggregator: тривалість агрегації з тегами transport (grpc/http) і cache (hit/miss) — саме за нею
+/// порівнюється HTTP (Лаб. 05) і gRPC (Лаб. 06); cache.hits / cache.misses рівня L2; часткові відмови.
+/// </summary>
+public sealed class AggregatorMetrics
+{
+    private readonly Histogram<double> _duration;
+    private readonly Counter<long> _hits;
+    private readonly Counter<long> _misses;
+    private readonly Counter<long> _partialFailures;
+
+    public AggregatorMetrics(IMeterFactory meterFactory)
+    {
+        var meter = meterFactory.Create("SmakoViz.Aggregator");
+        _duration = meter.CreateHistogram<double>("aggregator.request.duration", unit: "ms",
+            description: "Aggregation duration by scenario, transport and cache");
+        var cacheMeter = meterFactory.Create(Microsoft.Extensions.Hosting.Extensions.CacheMeterName);
+        _hits = cacheMeter.CreateCounter<long>("cache.hits");
+        _misses = cacheMeter.CreateCounter<long>("cache.misses");
+        _partialFailures = meter.CreateCounter<long>("aggregator.partial_failures", description: "Upstream calls turned into warnings");
+    }
+
+    public void RecordRequest(string scenario, Transport transport, bool fromCache, double ms)
+        => _duration.Record(ms,
+            new KeyValuePair<string, object?>("aggregator.scenario", scenario),
+            new KeyValuePair<string, object?>("aggregator.transport", transport.ToString().ToLowerInvariant()),
+            new KeyValuePair<string, object?>("aggregator.cache", fromCache ? "hit" : "miss"));
+
+    public void CacheHit() => _hits.Add(1, new KeyValuePair<string, object?>("cache.level", "L2"));
+    public void CacheMiss() => _misses.Add(1, new KeyValuePair<string, object?>("cache.level", "L2"));
+    public void PartialFailure(string service) => _partialFailures.Add(1, new KeyValuePair<string, object?>("service", service));
 }
 
 /// <summary>Обов'язковий для відповіді сервіс недоступний → 503 ProblemDetails.</summary>

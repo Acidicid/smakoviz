@@ -10,6 +10,9 @@
 
   <ItemGroup>
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
+    <!-- Лаб. 06: gRPC-сервер + Redis через Aspire -->
+    <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
+    <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.*" />
   </ItemGroup>
 
   <ItemGroup>
@@ -20,5 +23,9 @@
   <ItemGroup>
     <!-- Лаб. 05: Serilog, OpenTelemetry, health checks, service discovery — централізовано -->
     <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Лаб. 06: контракт gRPC; Server — генерується ReviewsService.ReviewsServiceBase -->
+    <Protobuf Include="Protos\reviews.proto" GrpcServices="Server" />
   </ItemGroup>
 </Project>

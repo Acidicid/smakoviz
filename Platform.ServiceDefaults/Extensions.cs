@@ -35,6 +35,9 @@ public static class Extensions
     /// <summary>Джерело трасування MongoDB-драйвера (пакет MongoDB.Driver.Core.Extensions.DiagnosticSources).</summary>
     public const string MongoActivitySource = "MongoDB.Driver.Core.Extensions.DiagnosticSources";
 
+    /// <summary>Meter метрик кешу (cache.hits / cache.misses з тегом cache.level = L1 | L2) — Лаб. 06.</summary>
+    public const string CacheMeterName = "SmakoViz.Cache";
+
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.ConfigureSerilog();              // 4.1 — Serilog як основний провайдер
@@ -114,18 +117,21 @@ public static class Extensions
             .WithMetrics(metrics => metrics
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
-                .AddRuntimeInstrumentation())
+                .AddRuntimeInstrumentation()
+                .AddMeter(CacheMeterName)                         // Лаб. 06: cache.hits / cache.misses (L1/L2)
+                .AddMeter("SmakoViz.*"))                          // інші власні метрики (Aggregator тощо)
             .WithTracing(tracing => tracing
                 .SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(samplingRatio)))
                 .AddSource(builder.Environment.ApplicationName)   // власні spans сервісу
                 .AddSource("SmakoViz.*")                          // бізнес-операції: SmakoViz.Delivery, .Menu, .Reviews, .Aggregator
                 .AddSource(MongoActivitySource)                   // MongoDB (Лаб. 04)
+                // серверні gRPC-виклики: span ASP.NET Core з атрибутами rpc.service / rpc.method
                 .AddAspNetCoreInstrumentation(options =>
                     // health-запити Dashboard не засмічують трасування
                     options.Filter = context =>
                         !context.Request.Path.StartsWithSegments(HealthEndpointPath)
                         && !context.Request.Path.StartsWithSegments(AlivenessEndpointPath))
-                .AddHttpClientInstrumentation()                   // вихідні виклики (Gateway, Aggregator)
+                .AddHttpClientInstrumentation()                   // вихідні виклики, у т.ч. gRPC-клієнти (HTTP/2)
                 .AddSqlClientInstrumentation());                  // Dapper (Лаб. 02) + EF Core (Лаб. 03)
 
         builder.AddOpenTelemetryExporters();

@@ -4,10 +4,17 @@ using Reviews.Application.Common.Interfaces;
 using Reviews.Application.Common.Messaging;
 using Reviews.Application.Common.Models;
 
+using Reviews.Application.Caching;
+
 namespace Reviews.Application.Queries.Reviews.GetRestaurantRating;
 
 /// <summary>Середня оцінка ресторану й розбивка за типами відгуків (aggregation pipeline в MongoDB).</summary>
-public sealed record GetRestaurantRatingQuery(long RestaurantId) : IQuery<RestaurantRatingDto>;
+public sealed record GetRestaurantRatingQuery(long RestaurantId) : IQuery<RestaurantRatingDto>, ICacheableQuery
+{
+    // Лаб. 06: агрегація $group дорожча за звичайне читання — кешуємо; інвалідують Create/Update/Delete відгуку
+    public string CacheKey => ReviewsCacheKeys.RestaurantRating(RestaurantId);
+    public CachePolicy CachePolicy => CachePolicy.Card;
+}
 
 public sealed class GetRestaurantRatingQueryHandler(IReviewQueries queries)
     : IRequestHandler<GetRestaurantRatingQuery, RestaurantRatingDto>

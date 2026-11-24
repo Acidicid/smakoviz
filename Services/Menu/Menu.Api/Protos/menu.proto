@@ -1,0 +1,80 @@
+// gRPC-контракт сервісу «Меню» (Лаб. 06). Використовується Aggregator для внутрішніх викликів.
+// ВАЖЛИВО: номери полів (= 1, = 2 …) після публікації НІКОЛИ не змінюються — саме вони, а не імена,
+// визначають бінарний формат. Нове поле → новий номер; видалене → reserved.
+syntax = "proto3";
+
+option csharp_namespace = "Menu.Grpc";
+
+package smakoviz.menu.v1;
+
+// Читання даних меню для внутрішніх сервісів (запис іде через REST + Gateway).
+service MenuService {
+  // Картка ресторану з профілем і стравами. NOT_FOUND — ресторану немає; INVALID_ARGUMENT — id <= 0.
+  rpc GetRestaurant (GetRestaurantRequest) returns (RestaurantReply);
+  // Одна страва.
+  rpc GetDish (GetDishRequest) returns (DishReply);
+  // Кілька страв за id (неіснуючі пропускаються) — для картки замовлення.
+  rpc GetDishesByIds (GetDishesByIdsRequest) returns (DishesReply);
+}
+
+// Гроші без втрати точності (як google.type.Money): 125.50 = units 125, nanos 500000000.
+message DecimalValue {
+  int64 units = 1;
+  sfixed32 nanos = 2;
+}
+
+message GetRestaurantRequest {
+  int64 id = 1;
+  // true — лише доступні для замовлення страви
+  bool only_available = 2;
+}
+
+message GetDishRequest {
+  int64 id = 1;
+}
+
+message GetDishesByIdsRequest {
+  repeated int64 ids = 1;
+}
+
+message RestaurantProfile {
+  string address = 1;
+  string phone = 2;
+  // "HH:mm"
+  string opens_at = 3;
+  string closes_at = 4;
+  DecimalValue min_order_amount = 5;
+}
+
+message DishSummary {
+  int64 id = 1;
+  string name = 2;
+  DecimalValue price = 3;
+  bool is_available = 4;
+  int32 available_portions = 5;
+}
+
+message RestaurantReply {
+  int64 id = 1;
+  string name = 2;
+  string city = 3;
+  string cuisine_type = 4;
+  bool is_active = 5;
+  // відсутній, якщо профіль ще не заповнено
+  RestaurantProfile profile = 6;
+  repeated DishSummary dishes = 7;
+}
+
+message DishReply {
+  int64 id = 1;
+  int64 restaurant_id = 2;
+  string restaurant_name = 3;
+  string name = 4;
+  DecimalValue price = 5;
+  bool is_available = 6;
+  int32 available_portions = 7;
+}
+
+message DishesReply {
+  repeated DishReply dishes = 1;
+}

@@ -6,6 +6,11 @@
     <!-- AutoMapper 15+: Community-ліцензія (безкоштовно для навчання);
          ключ з automapper.io кладеться в AutoMapper:LicenseKey, без нього — лише попередження в лозі -->
     <PackageReference Include="AutoMapper" Version="15.*" />
+    <!-- Лаб. 06: кешування L1 (IMemoryCache) + L2 (IDistributedCache → Redis), метрики, health check -->
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.Abstractions" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="9.*" />
     <!-- ILogger<T> для бізнес-подій (Лаб. 05) -->
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.*" />
   </ItemGroup>

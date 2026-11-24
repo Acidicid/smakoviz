@@ -6,9 +6,16 @@ using Reviews.Application.Common.Messaging;
 using Reviews.Application.Common.Models;
 using Reviews.Application.Common.Validation;
 
+using Reviews.Application.Caching;
+
 namespace Reviews.Application.Queries.Reviews.GetReviewById;
 
-public sealed record GetReviewByIdQuery(string Id) : IQuery<ReviewDetailsDto>;
+public sealed record GetReviewByIdQuery(string Id) : IQuery<ReviewDetailsDto>, ICacheableQuery
+{
+    // Лаб. 06: картка відгуку кешується (CachingBehavior); інвалідують Update/Delete/AddComment
+    public string CacheKey => ReviewsCacheKeys.Review(Id);
+    public CachePolicy CachePolicy => CachePolicy.Card;
+}
 
 /// <summary>Обробник читає через IReviewQueries (проєкція в DTO робиться в MongoDB), а не через IMongoCollection.</summary>
 public sealed class GetReviewByIdQueryHandler(IReviewQueries queries)

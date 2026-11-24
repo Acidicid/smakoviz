@@ -4,6 +4,11 @@
 
   <ItemGroup>
     <!-- MediatR 13+ і AutoMapper 15+ — Lucky Penny Software, безкоштовна Community-ліцензія (один ключ на обидва) -->
+    <!-- Лаб. 06: кешування L1 (IMemoryCache) + L2 (IDistributedCache → Redis), метрики, health check -->
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.Abstractions" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="9.*" />
     <PackageReference Include="MediatR" Version="13.*" />
     <PackageReference Include="AutoMapper" Version="15.*" />
     <PackageReference Include="FluentValidation" Version="12.*" />

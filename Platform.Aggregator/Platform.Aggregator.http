@@ -1,4 +1,5 @@
 # Напряму (в обхід Gateway). Через Gateway — http://localhost:5000/api/aggregator/...
+# Лаб. 06: за замовчуванням gRPC + кеш Redis; ?transport=http — REST з Лаб. 05; ?noCache=true — без кешу (для порівняння)
 @Aggregator = http://localhost:5110
 @Gateway = http://localhost:5000
 
@@ -14,3 +15,12 @@ GET {{Gateway}}/api/aggregator/orders/999999/full
 
 ### Напряму в Aggregator
 GET {{Aggregator}}/api/aggregator/restaurants/2
+
+### Порівняння транспорту (без кешу): gRPC
+GET {{Gateway}}/api/aggregator/orders/1/full?noCache=true
+
+### Порівняння транспорту (без кешу): HTTP REST (Лаб. 05)
+GET {{Gateway}}/api/aggregator/orders/1/full?transport=http&noCache=true
+
+### Двічі поспіль — другий раз заголовок X-Cache: HIT (Redis)
+GET {{Gateway}}/api/aggregator/restaurants/1

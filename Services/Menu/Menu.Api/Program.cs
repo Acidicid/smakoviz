@@ -1,11 +1,13 @@
 using FluentValidation;
 using Menu.Api.Infrastructure;
+using Menu.Bll.Caching;
 using Menu.Bll.Mapping;
 using Menu.Bll.Services;
 using Menu.Bll.Validation;
 using Menu.Dal.Context;
 using Menu.Dal.Repositories;
 using Menu.Dal.Seeding;
+using Menu.Grpc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Serilog;
@@ -27,9 +29,41 @@ builder.Services.AddDbContext<MenuDbContext>(options => options
 
 // ---------- DI: Api → Bll → Dal; усе Scoped (один DbContext і один UoW на HTTP-запит) ----------
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
-builder.Services.AddScoped<IRestaurantService, RestaurantService>();
-builder.Services.AddScoped<IDishService, DishService>();
-builder.Services.AddScoped<ICategoryService, CategoryService>();
+// Лаб. 06: сервіси з Лаб. 03 загорнуті в кешовані декоратори (Menu.Bll/Caching) — і контролери, і gRPC
+// отримують IDishService/IRestaurantService/ICategoryService уже з кешем L1 → L2 → БД.
+builder.Services.AddScoped<RestaurantService>();
+builder.Services.AddScoped<DishService>();
+builder.Services.AddScoped<CategoryService>();
+builder.Services.AddScoped<IRestaurantService, CachedRestaurantService>();
+builder.Services.AddScoped<IDishService, CachedDishService>();
+builder.Services.AddScoped<ICategoryService, CachedCategoryService>();
+
+// ---------- Лаб. 06: кешування ----------
+// L1 — IMemoryCache з обмеженням розміру: кожен запис має Size = 1, тож не більше 10 000 записів;
+// при переповненні витісняється 25 % (спершу Low-пріоритет і найдавніше використані).
+builder.Services.AddMemoryCache(options =>
+{
+    options.SizeLimit = 10_000;
+    options.CompactionPercentage = 0.25;
+    options.TrackStatistics = true;   // статистика для /health
+});
+// L2 — IDistributedCache поверх Redis через Aspire-інтеграцію (ConnectionStrings:redis передає AppHost;
+// інтеграція сама додає retry, health check і трасування Redis). Без Aspire — кеш у пам'яті, щоб сервіс запускався.
+if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
+    builder.AddRedisDistributedCache("redis");
+else
+    builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSingleton<CacheMetrics>();
+builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
+builder.Services.AddHostedService<MenuCacheWarmupService>();   // прогрівання категорій і карток ресторанів
+builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache");
+
+// ---------- Лаб. 06: gRPC (HTTP/2 через HTTPS-endpoint, ALPN) + серверний interceptor логування ----------
+builder.Services.AddGrpc(options =>
+{
+    options.Interceptors.Add<GrpcLoggingInterceptor>();
+    options.EnableDetailedErrors = builder.Environment.IsDevelopment();
+});
 
 builder.Services.AddAutoMapper(cfg =>
 {
@@ -90,6 +124,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapGrpcService<MenuGrpcService>();   // Лаб. 06: Protos/menu.proto
 app.MapDefaultEndpoints();   // /health і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

@@ -2,6 +2,7 @@ using AutoMapper;
 using FluentValidation;
 using MediatR;
 using MongoDB.Bson;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Exceptions;
 using Reviews.Application.Common.Messaging;
 using Reviews.Application.Common.Models;
@@ -23,7 +24,7 @@ public sealed record UpdateReviewCommand(
     AspectsDto? Aspects,
     int? ExpectedVersion) : ICommand<ReviewDetailsDto>;
 
-public sealed class UpdateReviewCommandHandler(IReviewRepository reviews, IMapper mapper)
+public sealed class UpdateReviewCommandHandler(IReviewRepository reviews, IMapper mapper, ITwoLevelCache cache)
     : IRequestHandler<UpdateReviewCommand, ReviewDetailsDto>
 {
     public async Task<ReviewDetailsDto> Handle(UpdateReviewCommand cmd, CancellationToken ct)
@@ -41,6 +42,8 @@ public sealed class UpdateReviewCommandHandler(IReviewRepository reviews, IMappe
 
         review.Edit(new Rating(cmd.Rating), cmd.Text, aspects);
         await reviews.UpdateAsync(review, ct);   // ReplaceOne лише якщо version у БД не змінилась
+        await cache.InvalidateAsync("ReviewUpdated", ct,
+            ReviewsCacheKeys.Review(cmd.Id), ReviewsCacheKeys.RestaurantRating(review.RestaurantId));
 
         return mapper.Map<ReviewDetailsDto>(review);
     }

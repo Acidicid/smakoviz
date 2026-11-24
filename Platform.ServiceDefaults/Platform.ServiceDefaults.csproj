@@ -15,7 +15,7 @@
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="9.*" />
     <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="9.*" />
 
-    <!-- OpenTelemetry: версії ЗАКРІПЛЕНІ на 1.12 — новіші (1.14+) тягнуть бібліотеки .NET 10/11 і ламають запуск на net9.0 -->
+    <!-- OpenTelemetry -->
     <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.12.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.12.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.12.0" />
@@ -28,5 +28,8 @@
     <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
     <PackageReference Include="Serilog.Enrichers.Environment" Version="3.*" />
     <PackageReference Include="Serilog.Enrichers.Thread" Version="4.*" />
+
+    <!-- Лаб. 06: базовий клас Interceptor для GrpcLoggingInterceptor -->
+    <PackageReference Include="Grpc.Core.Api" Version="2.71.0" />
   </ItemGroup>
 </Project>

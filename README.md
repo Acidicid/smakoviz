@@ -8,6 +8,7 @@
 | Лаб. 03 | Мікросервіс «Меню» на EF Core: Code-First, Fluent API, міграції, Eager/Explicit/M:N, специфікації, пагінація, FluentValidation, Serilog | [розділ 10](#10-лаб-03--мікросервіс-меню-на-ef-core) |
 | Лаб. 04 | Мікросервіс «Відгуки»: Clean Architecture (4 шари) + CQRS (MediatR) + MongoDB, Value Objects, pipeline behaviors | [розділ 11](#11-лаб-04--мікросервіс-відгуки-clean-architecture--cqrs--mongodb) |
 | Лаб. 05 | Платформа .NET Aspire: ServiceDefaults (Serilog + OpenTelemetry + CorrelationId), API Gateway (YARP), Aggregator (Task.WhenAll, часткові відмови) | [розділ 12](#12-лаб-05--платформа-net-aspire-gateway-aggregator-observability) |
+| Лаб. 06 | Кешування L1 (IMemoryCache) + L2 (Redis), gRPC-контракти й сервіси, Aggregator на gRPC, метрики кешу | [розділ 13](#13-лаб-06--grpc-і-кешування-l1--l2) |
 
 ## 1. Предметна область
 
@@ -195,7 +196,10 @@ Platform.AppHost/    .NET Aspire — запуск усієї платформи 
 Platform.ServiceDefaults/  Extensions.cs: Serilog, OpenTelemetry, health, service discovery,
                      resilience, CorrelationIdMiddleware + CorrelationIdHandler   (Лаб. 05)
 Platform.ApiGateway/ YARP: маршрути (appsettings.json), логування, JWT, Dockerfile (Лаб. 05)
-Platform.Aggregator/ typed HttpClients, AggregationService (Task.WhenAll + Warnings)  (Лаб. 05)
+Platform.Aggregator/ gRPC-клієнти (Лаб. 06) + typed HttpClients (Лаб. 05), AggregationService
+                     (Task.WhenAll + Warnings), кеш агрегованих відповідей у Redis
+Services/*/*.Api/Protos/  gRPC-контракти *.proto;  */Grpc/ — реалізації gRPC-сервісів        (Лаб. 06)
+Services/*/*.Bll/Caching/, Reviews.Application/Caching/  дворівневий кеш L1 → L2 → БД           (Лаб. 06)
 Services/
   Delivery/          мікросервіс «Доставка» = Проєкт №1 (ADO.NET + Dapper)     (Лаб. 02)
     Delivery.Api/      контролери, Program.cs, appsettings.json, Swagger, Serilog
@@ -917,3 +921,94 @@ curl -i $GW/api/aggregator/restaurants/1
    **всіх** сервісів ланцюжка з полями ServiceName, Environment, MachineName, ThreadId, TraceId, SpanId.
 4. Порівняй виклик напряму (`delivery-api` за його адресою з Dashboard) і через Gateway: Gateway додає CorrelationId
    і пише рядок `Gateway GET /api/delivery/orders/1 -> route delivery, cluster delivery …`.
+
+## 13. Лаб. 06 — gRPC і кешування (L1 + L2)
+
+### 13.1 Що додано
+
+```
+                         Gateway :5000  (REST)
+                              │
+                        aggregator ── Redis (aggregator:order:{id}:full, TTL 30 с; часткові відповіді не кешуються)
+          gRPC (HTTP/2)  ┌────┼──────────────┐   Task.WhenAll, deadline 5 с, CorrelationId у метаданих
+                         ▼    ▼              ▼
+               delivery-api  menu-api    reviews-api      ← кожен: Protos/*.proto + Grpc/*GrpcService.cs
+                    │           │             │
+              L1 IMemoryCache (SizeLimit 10 000, sliding + absolute)   ← у пам'яті процесу, найшвидше
+                    │           │             │
+              L2 Redis (IDistributedCache через Aspire, префікси delivery: / menu: / reviews:)
+                    │           │             │
+                SQL Server   SQL Server     MongoDB
+```
+
+| Вимога | Де |
+|---|---|
+| Redis в AppHost: `AddRedis("redis").WithDataVolume(...)`, `WithReference(redis).WaitFor(redis)` для сервісів і Aggregator | `Platform.AppHost/AppHost.cs` |
+| `.proto` (proto3, `package`, `csharp_namespace`, гроші — `DecimalValue {units, nanos}`, час — `google.protobuf.Timestamp`) | `Services/Delivery/Delivery.Api/Protos/delivery.proto`, `Services/Menu/Menu.Api/Protos/menu.proto`, `Services/Reviews/Reviews.WebApi/Protos/reviews.proto` |
+| `<Protobuf GrpcServices="Server">` у сервісах, `GrpcServices="Client"` (ті самі файли) в Aggregator | `*.Api.csproj`, `Platform.Aggregator.csproj` |
+| gRPC-сервіси = адаптери над BLL; NotFound / InvalidArgument / FailedPrecondition замість Internal; `AddGrpc` + `MapGrpcService` | `*/Grpc/*GrpcService.cs`, `Program.cs` сервісів |
+| Серверний interceptor: метод, peer, статус, тривалість | `Platform.ServiceDefaults/GrpcLoggingInterceptor.cs` |
+| `AddMemoryCache` з `SizeLimit`, записи з `Size`, sliding + absolute expiration, пріоритети | `Program.cs` сервісів, `*/Caching/TwoLevelCache.cs` (`CachePolicy`) |
+| Cache-aside, ключі `menu:dish:{id}`, `menu:restaurant:{id}:available`, `menu:categories:all`, `delivery:order:{id}`, `reviews:restaurant:{id}:rating`; лог hit/miss | `MenuCacheKeys`, `DeliveryCacheKeys`, `ReviewsCacheKeys`, `TwoLevelCache` |
+| Інвалідація одразу після POST/PUT/DELETE з причиною в лозі | `Menu.Bll/Caching/CachedMenuServices.cs`, `Delivery.Bll/Caching/CachedDeliveryServices.cs`, обробники команд Reviews |
+| `IDistributedCache` через `builder.AddRedisDistributedCache("redis")`, System.Text.Json, префікси, TTL за типом даних | `Program.cs`, `TwoLevelCache` |
+| Дворівневий кеш L1 → L2 → БД, рівні заповнюються на зворотному шляху, TTL L1 < L2; Redis упав → L1 + БД | `TwoLevelCache.GetOrCreateAsync` |
+| Кеш у Reviews через MediatR: `ICacheableQuery` + `CachingBehavior` | `Reviews.Application/Caching/CachingBehavior.cs` |
+| Прогрівання кешу (категорії, картки ресторанів) | `Menu.Bll/Caching/MenuCacheWarmupService.cs` |
+| `AddGrpcClient` для кожного сервісу з адресою `https://<resource>` (service discovery) | `Platform.Aggregator/Program.cs` |
+| Паралельні gRPC-виклики, `RpcException` (Unavailable / DeadlineExceeded) → `warnings` замість 500 | `Platform.Aggregator/Services/AggregationService.cs` |
+| Метрики `cache.hits` / `cache.misses` з тегом `cache.level` (L1/L2), Meter `SmakoViz.Cache` у ServiceDefaults | `CacheMetrics`, `Extensions.cs` → `AddMeter` |
+| Статистика кешу в `/health` (записи, hit ratio, чи живий Redis) | `CacheHealthCheck` |
+
+### 13.2 Запуск
+
+gRPC працює поверх HTTP/2, тож сервіси тепер стартують із профілем **https** (HTTP/1.1 + HTTP/2 через ALPN).
+Потрібен довірений dev-сертифікат (один раз):
+
+```bash
+dotnet dev-certs https --trust
+dotnet run --project Platform.AppHost
+```
+
+У Dashboard з'явився ресурс **redis** (Running). REST через Gateway працює як у Лаб. 05.
+
+### 13.3 Перевірка
+
+```bash
+GW=http://localhost:5000
+
+# 1) Кеш: двічі поспіль — у Traces другого запиту немає SQL-span (дані з L1/L2)
+curl $GW/api/menu/dishes/101
+curl $GW/api/menu/dishes/101
+
+# 2) Інвалідація: змінюємо ціну → наступний GET повертає НОВУ ціну (у лозі "Cache invalidated ..., reason DishPriceChanged")
+curl -i -X PUT $GW/api/menu/dishes/101/price -H "Content-Type: application/json" -d '{"newPrice":199}'
+curl $GW/api/menu/dishes/101
+
+# 3) Aggregator на gRPC; другий виклик — заголовок X-Cache: HIT (Redis)
+curl -i $GW/api/aggregator/orders/1/full
+curl -i $GW/api/aggregator/orders/1/full
+
+# 4) Порівняння HTTP (Лаб. 05) і gRPC (Лаб. 06) без кешу — дивись X-Aggregator-Elapsed-Ms
+#    і метрику aggregator.request.duration (тег aggregator.transport) у Dashboard → Metrics
+for i in 1 2 3 4 5; do curl -s -o /dev/null -D - "$GW/api/aggregator/orders/1/full?noCache=true" | grep -i elapsed; done
+for i in 1 2 3 4 5; do curl -s -o /dev/null -D - "$GW/api/aggregator/orders/1/full?transport=http&noCache=true" | grep -i elapsed; done
+
+# 5) Стан кешу
+curl https://localhost:<порт menu-api з Dashboard>/health
+```
+
+**Часткова відмова:** зупини `menu-api` в Dashboard → `curl "$GW/api/aggregator/orders/1/full?noCache=true"` дає 200
+із замовленням і `warnings: ["menu-api is unavailable: …"]`; така відповідь у Redis **не** кешується.
+
+**Redis недоступний:** зупини `redis` → сервіси відповідають далі (L1 + БД, у лозі `Redis (L2) … failed`), `/health` показує `Degraded`.
+
+**Dashboard:**
+- **Traces** — `GET /api/aggregator/orders/{id}/full`: `api-gateway → aggregator →` паралельні spans
+  `POST /smakoviz.menu.v1.MenuService/GetRestaurant`, `/smakoviz.reviews.v1.ReviewsService/...` (клієнт і сервер — батько/нащадок).
+- **Structured logs** — `gRPC {GrpcMethod} from {Peer}: OK in … ms`, `Cache hit {CacheKey} at {CacheLevel}`, `Cache invalidated …`.
+- **Metrics** — `cache.hits`, `cache.misses` (фільтр `cache.level` = L1 / L2), `aggregator.request.duration`.
+
+**Сумісність proto:** зміни номер поля, наприклад `string name = 2;` → `= 12;`, лише в `menu.proto` сервісу (у
+Aggregator зв'язаний той самий файл, тому для експерименту тимчасово скопіюй його) — клієнт перестане бачити назву.
+Поверни номер назад: номери полів після публікації не змінюються.

@@ -1,0 +1,69 @@
+// gRPC-контракт сервісу «Доставка» (Лаб. 06). Номери полів після публікації не змінюються.
+syntax = "proto3";
+
+option csharp_namespace = "Delivery.Grpc";
+
+package smakoviz.delivery.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Читання замовлень для внутрішніх сервісів (Aggregator).
+service DeliveryService {
+  // Замовлення з позиціями. NOT_FOUND — немає; INVALID_ARGUMENT — id <= 0.
+  rpc GetOrder (GetOrderRequest) returns (OrderReply);
+  // Останні замовлення клієнта (коротко).
+  rpc GetCustomerOrders (GetCustomerOrdersRequest) returns (OrderSummariesReply);
+}
+
+// Гроші без втрати точності: 125.50 = units 125, nanos 500000000.
+message DecimalValue {
+  int64 units = 1;
+  sfixed32 nanos = 2;
+}
+
+message GetOrderRequest {
+  int64 id = 1;
+}
+
+message GetCustomerOrdersRequest {
+  int64 customer_id = 1;
+  // 1..50, за замовчуванням 10
+  int32 take = 2;
+}
+
+message OrderLine {
+  int64 dish_id = 1;
+  string dish_name = 2;
+  DecimalValue unit_price = 3;
+  int32 quantity = 4;
+  DecimalValue line_total = 5;
+}
+
+message OrderReply {
+  int64 id = 1;
+  string order_number = 2;
+  int64 customer_id = 3;
+  int64 restaurant_id = 4;
+  string restaurant_name = 5;
+  // Placed | Confirmed | Cooking | OnTheWay | Delivered | Cancelled
+  string status = 6;
+  google.protobuf.Timestamp placed_at = 7;
+  DecimalValue items_total = 8;
+  DecimalValue delivery_fee = 9;
+  DecimalValue total_amount = 10;
+  repeated OrderLine lines = 11;
+}
+
+message OrderSummary {
+  int64 id = 1;
+  string order_number = 2;
+  string restaurant_name = 3;
+  string status = 4;
+  google.protobuf.Timestamp placed_at = 5;
+  DecimalValue total_amount = 6;
+}
+
+message OrderSummariesReply {
+  repeated OrderSummary orders = 1;
+  int64 total_count = 2;
+}

@@ -9,12 +9,14 @@ using Reviews.Application.Common.Validation;
 using Reviews.Domain.Entities;
 using Reviews.Domain.Interfaces;
 
+using Reviews.Application.Caching;
+
 namespace Reviews.Application.Commands.Reviews.AddComment;
 
 /// <summary>Додати коментар у вкладений масив comments відгуку.</summary>
 public sealed record AddCommentCommand(string ReviewId, string AuthorName, string Text) : ICommand<ReviewDetailsDto>;
 
-public sealed class AddCommentCommandHandler(IReviewRepository reviews, IMapper mapper)
+public sealed class AddCommentCommandHandler(IReviewRepository reviews, IMapper mapper, ITwoLevelCache cache)
     : IRequestHandler<AddCommentCommand, ReviewDetailsDto>
 {
     public async Task<ReviewDetailsDto> Handle(AddCommentCommand cmd, CancellationToken ct)
@@ -24,6 +26,7 @@ public sealed class AddCommentCommandHandler(IReviewRepository reviews, IMapper 
 
         review.AddComment(cmd.AuthorName, cmd.Text);   // ліміт 50 коментарів — правило сутності
         await reviews.UpdateAsync(review, ct);         // з перевіркою версії
+        await cache.InvalidateAsync("ReviewCommentAdded", ct, ReviewsCacheKeys.Review(cmd.ReviewId));
 
         return mapper.Map<ReviewDetailsDto>(review);
     }

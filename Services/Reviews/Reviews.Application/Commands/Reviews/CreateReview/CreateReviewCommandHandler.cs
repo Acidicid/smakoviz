@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using MediatR;
 using Microsoft.Extensions.Logging;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Validation;
 using Reviews.Domain.Entities;
 using Reviews.Domain.Interfaces;
@@ -13,7 +14,7 @@ namespace Reviews.Application.Commands.Reviews.CreateReview;
 /// Сюди потрапляють лише провалідовані команди (ValidationBehavior); бізнес-правила самої сутності
 /// перевіряють конструктори Review і Value Objects.
 /// </summary>
-public sealed class CreateReviewCommandHandler(IReviewRepository reviews, ILogger<CreateReviewCommandHandler> logger)
+public sealed class CreateReviewCommandHandler(IReviewRepository reviews, ITwoLevelCache cache, ILogger<CreateReviewCommandHandler> logger)
     : IRequestHandler<CreateReviewCommand, string>
 {
     /// <summary>Власні spans бізнес-операцій (Лаб. 05), підключені в ServiceDefaults через AddSource("SmakoViz.*").</summary>
@@ -44,6 +45,8 @@ public sealed class CreateReviewCommandHandler(IReviewRepository reviews, ILogge
             cmd.Photos);
 
         await reviews.AddAsync(review, ct);
+        // Лаб. 06: новий відгук змінює середню оцінку ресторану → скидаємо кеш рейтингу одразу після запису
+        await cache.InvalidateAsync("ReviewCreated", ct, ReviewsCacheKeys.RestaurantRating(cmd.RestaurantId));
 
         activity?.SetTag("review.id", review.Id.ToString());
         // Бізнес-подія: без тексту відгуку й імені автора — лише ідентифікатори та оцінка

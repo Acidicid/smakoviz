@@ -1,6 +1,6 @@
 // =====================================================================
 // SmakoViz · .NET Aspire AppHost — вся платформа однією командою:
-//   SQL Server + MongoDB → delivery-api, menu-api, reviews-api → aggregator → api-gateway (http://localhost:5000)
+//   SQL Server + MongoDB + Redis → delivery-api, menu-api, reviews-api → aggregator → api-gateway (http://localhost:5000)
 //   dotnet run --project Platform.AppHost
 // Порядок запуску задають ланцюжки WaitFor: БД → сервіси → Aggregator → Gateway.
 // =====================================================================
@@ -18,6 +18,13 @@ var sql = builder.AddSqlServer("sql", password: sqlPassword)
     .WithDataVolume("smakoviz-delivery-sql")
     .WithLifetime(ContainerLifetime.Persistent);   // контейнер не перестворюється при кожному запуску
 
+// ---------- Лаб. 06: Redis — розподілений кеш (L2) для сервісів і Aggregator ----------
+// Рядок підключення потрапляє в сервіси як ConnectionStrings:redis (адреса в appsettings не потрібна).
+// Volume — кеш переживає перезапуск контейнера.
+var redis = builder.AddRedis("redis")
+    .WithDataVolume("smakoviz-redis")
+    .WithLifetime(ContainerLifetime.Persistent);
+
 // Кожен мікросервіс — СВОЯ база (Лаб. 01), хоч і на одному сервері SQL у розробці.
 var deliveryDb = sql.AddDatabase("DeliveryDb", databaseName: "SmakoViz_Delivery");   // Проєкт №1 — ADO.NET + Dapper
 var menuDb = sql.AddDatabase("MenuDb", databaseName: "SmakoViz_Menu");               // Проєкт №2 — EF Core
@@ -26,17 +33,23 @@ var menuDb = sql.AddDatabase("MenuDb", databaseName: "SmakoViz_Menu");          
 //   var deliveryDb = builder.AddConnectionString("DeliveryDb");
 // і прописати рядок у appsettings.json цього проєкту: "ConnectionStrings": { "DeliveryDb": "..." }
 
-var delivery = builder.AddProject<Projects.Delivery_Api>("delivery-api")
+// launchProfileName "https": HTTPS-endpoint з HTTP/1.1 + HTTP/2 (ALPN) — потрібен для gRPC (Лаб. 06);
+// REST через Gateway іде на http-endpoint того самого сервісу.
+var delivery = builder.AddProject<Projects.Delivery_Api>("delivery-api", launchProfileName: "https")
     .WithReference(deliveryDb)
-    .WaitFor(deliveryDb)                              // API стартує, коли база готова
+    .WaitFor(deliveryDb)
+    .WithReference(redis)
+    .WaitFor(redis)                              // API стартує, коли база готова
     .WithEnvironment("Database__Initialize", "true")  // застосувати schema/procedures/seed з Лаб. 01
     .WithExternalHttpEndpoints();
 
 // Сервіс «Меню» (Лаб. 03): ім'я ресурсу "MenuDb" = ConnectionStrings:MenuDb у Menu.Api;
 // схему створюють міграції EF Core (MigrateAsync при старті), дані — HasData + DbInitializer.
-var menu = builder.AddProject<Projects.Menu_Api>("menu-api")
+var menu = builder.AddProject<Projects.Menu_Api>("menu-api", launchProfileName: "https")
     .WithReference(menuDb)
     .WaitFor(menuDb)
+    .WithReference(redis)
+    .WaitFor(redis)
     .WithExternalHttpEndpoints();
 
 // Сервіс «Відгуки» (Лаб. 04, Clean Architecture + CQRS): MongoDB у контейнері.
@@ -48,9 +61,11 @@ var mongo = builder.AddMongoDB("mongo")
 
 var reviewsDb = mongo.AddDatabase("ReviewsDb", databaseName: "smakoviz_feedback");
 
-var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api", launchProfileName: "https")
     .WithReference(reviewsDb)
     .WaitFor(reviewsDb)
+    .WithReference(redis)
+    .WaitFor(redis)
     .WithExternalHttpEndpoints();
 
 // ---------- Лаб. 05: Aggregator + API Gateway ----------
@@ -58,7 +73,8 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
 // ("https+http://menu-api", "http://menu-api"), а реальний порт підставляє Aspire.
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WithReference(delivery).WithReference(menu).WithReference(reviews)
-    .WaitFor(delivery).WaitFor(menu).WaitFor(reviews);
+    .WaitFor(delivery).WaitFor(menu).WaitFor(reviews)
+    .WithReference(redis).WaitFor(redis);   // Лаб. 06: кеш агрегованих відповідей
 
 // Gateway — єдина точка входу з ФІКСОВАНИМ портом 5000; стартує останнім.
 builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")

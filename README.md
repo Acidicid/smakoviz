@@ -6,6 +6,7 @@
 | Лаб. 01 | Проєктування 3 баз: SQL (Доставка, Меню) + MongoDB (Відгуки) | [розділи 1–8](#1-предметна-область) |
 | Лаб. 02 | Мікросервіс «Доставка»: DAL (ADO.NET + Dapper, Unit of Work) → BLL → Web API, запуск через .NET Aspire | [розділ 9](#9-лаб-02--мікросервіс-доставка-dal--bll--api--aspire) |
 | Лаб. 03 | Мікросервіс «Меню» на EF Core: Code-First, Fluent API, міграції, Eager/Explicit/M:N, специфікації, пагінація, FluentValidation, Serilog | [розділ 10](#10-лаб-03--мікросервіс-меню-на-ef-core) |
+| Лаб. 04 | Мікросервіс «Відгуки»: Clean Architecture (4 шари) + CQRS (MediatR) + MongoDB, Value Objects, pipeline behaviors | [розділ 11](#11-лаб-04--мікросервіс-відгуки-clean-architecture--cqrs--mongodb) |
 
 ## 1. Предметна область
 
@@ -202,6 +203,11 @@ Services/
     Menu.Dal/          DbContext, Configurations/, Migrations/, репозиторії, Seeding/
     Menu.Domain/       сутності з бізнес-правилами, доменні винятки
     create-migration.ps1  генерація міграції InitialCreate + SQL-скрипту
+  Reviews/           мікросервіс «Відгуки» = Проєкт №3 (Clean Architecture + CQRS + MongoDB)  (Лаб. 04)
+    Reviews.Domain/          сутності, Value Objects, доменні винятки, інтерфейси репозиторіїв
+    Reviews.Application/     Commands/, Queries/, Behaviors/, Common/ (DTO, IReviewQueries, мапінг)
+    Reviews.Infrastructure/  MongoDbContext, BsonClassMap, серіалізатори, репозиторії, Seeding/
+    Reviews.WebApi/          контролери (ISender), Program.cs, обробка помилок
 README.md            опис домену, контекстів, політика дублювання, ERD, розгортання
 docs/
   contexts.md          контексти, агрегати, життєвий цикл замовлення
@@ -647,3 +653,146 @@ curl -i -X PUT "$API/api/restaurants/3/profile" -H "Content-Type: application/js
 | Swagger | Пагінація | 400 з помилками валідації | SQL у лозі (eager / explicit) |
 |---------|-----------|---------------------------|-------------------------------|
 | ![](docs/screenshots/lab03-swagger.png) | ![](docs/screenshots/lab03-paging.png) | ![](docs/screenshots/lab03-validation.png) | ![](docs/screenshots/lab03-sql-log.png) |
+
+---
+
+## 11. Лаб. 04 — мікросервіс «Відгуки» (Clean Architecture + CQRS + MongoDB)
+
+Сервіс **Reviews** — Проєкт №3 з Лаб. 01 (MongoDB `smakoviz_feedback`: `reviews`, `discussions`, `messages`).
+
+### 11.1. Шари та залежності
+
+```mermaid
+flowchart LR
+    WebApi["Reviews.WebApi<br/>контролери (ISender), ProblemDetails, Swagger"] --> Application
+    WebApi -. "лише DI на старті" .-> Infrastructure
+    Infrastructure["Reviews.Infrastructure<br/>MongoDbContext, BsonClassMap,<br/>репозиторії, запити, сідінг, індекси"] --> Application
+    Infrastructure --> Domain
+    Application["Reviews.Application<br/>Commands / Queries (MediatR),<br/>Behaviors, валідатори, DTO, AutoMapper"] --> Domain
+    Domain["Reviews.Domain<br/>BaseEntity, ValueObject, Review, Discussion, Message,<br/>Author, Rating, RatingAspects, IReviewRepository"]
+```
+
+| Шар | Посилається на | Пакети |
+|-----|----------------|--------|
+| `Reviews.Domain` | **нічого** | лише `MongoDB.Bson` (тип `ObjectId`), **без** `MongoDB.Driver` |
+| `Reviews.Application` | Domain | MediatR, FluentValidation, AutoMapper |
+| `Reviews.Infrastructure` | Application, Domain | MongoDB.Driver, Options |
+| `Reviews.WebApi` | Application, Infrastructure (лише для DI) | Swashbuckle, Serilog |
+
+Кожен шар реєструє себе власним методом: `AddApplication()` (MediatR + behaviors + валідатори),
+`AddInfrastructure()` (MongoDB + репозиторії + індекси + сідінг).
+
+### 11.2. Домен
+
+- `BaseEntity`: `Id` (ObjectId), `CreatedAt`, `UpdatedAt`, `Version`; setter-и захищені, зміни — лише методами.
+- Сутності: **`Review`** (вкладені `comments[]`, `photos[]`; методи `Edit`, `AddComment`, `AttachDiscussion`),
+  **`Discussion`** (гібрид: прев'ю останніх 3 повідомлень + лічильник; `RegisterMessage`), **`Message`**.
+- **Value Objects** (незмінні, порівняння за `GetEqualityComponents`, валідація в конструкторі, вбудовані в сутності):
+  `Author` (author { customerId, displayName }), `Rating` (1–5, у БД — просто число), `RatingAspects`
+  (aspects { food, packaging, portionSize }), `MessageAuthor`, `MessagePreview`.
+- Інтерфейси репозиторіїв (`IReviewRepository`, `IDiscussionRepository`, `IMessageRepository`) — у Domain;
+  інтерфейси читання (`IReviewQueries`, `IDiscussionQueries`) — в Application; реалізації — в Infrastructure.
+
+### 11.3. CQRS (MediatR)
+
+| Команди (запис) | Запити (читання) |
+|-----------------|------------------|
+| `CreateReviewCommand` → Id | `GetReviewByIdQuery` → `ReviewDetailsDto` |
+| `UpdateReviewCommand` (з `ExpectedVersion`) | `GetReviewsListQuery` → `PagedResult<ReviewListItemDto>` |
+| `DeleteReviewCommand` | `GetRestaurantRatingQuery` (aggregation `$match` → `$group`) |
+| `AddCommentCommand` | `GetDiscussionByIdQuery` |
+| `CreateDiscussionCommand`, `PostMessageCommand` | `GetDiscussionMessagesQuery` |
+
+Базові інтерфейси: `ICommand`, `ICommand<T>`, `IQuery<T>`. Обробники команд працюють через інтерфейси репозиторіїв,
+обробники запитів — через `IReviewQueries`, а та в Infrastructure робить **проєкцію одразу в DTO** (`$project`),
+фільтри (`$match`), сортування (`$sort`, підкріплене складеними індексами) і пагінацію (`$skip/$limit`).
+Жоден контролер чи обробник не бачить `IMongoCollection`.
+
+### 11.4. Pipeline Behaviors
+
+```
+Request → LoggingBehavior → ValidationBehavior → PerformanceBehavior → Handler
+```
+
+- **LoggingBehavior** — `Handling {RequestName} {@Request}` / `Handled ... in {ElapsedMs} ms`;
+  для відхиленого запиту — `rejected by validation — handler was NOT executed`.
+- **ValidationBehavior** — запускає всі валідатори FluentValidation, збирає **всі** помилки й кидає
+  `ValidationException` до виклику обробника. Перевіряються рядки ObjectId (`MustBeObjectId`), допустимі enum-и і
+  є **асинхронні правила з запитом до MongoDB**: «клієнт ще не залишав відгук на цю ціль», «відгук для обговорення існує».
+- **PerformanceBehavior** — попередження в лог, якщо обробник працює довше 500 мс.
+
+### 11.5. MongoDB
+
+- `MongoDbContext` (Singleton) отримує налаштування через `IOptions<MongoDbOptions>` (секція `MongoDb`);
+  .NET Aspire перекриває їх рядком `ConnectionStrings__ReviewsDb`.
+- **BsonClassMap без атрибутів у домені** (`MongoMappings.Register()`, один раз при старті): конвенція camelCase,
+  `IgnoreExtraElements`, `IgnoreIfNull`; приватні поля `_comments`, `_photos`, `_recentMessages` → `comments`,
+  `photos`, `recentMessages`; Value Objects створюються через конструктор (`MapCreator`); власні серіалізатори:
+  `RatingSerializer` (VO → число) і `CamelCaseEnumSerializer` (`ReviewTarget.Dish` ↔ `"dish"`).
+  Документи мають **ту саму структуру, що в Лаб. 01**, і проходять її валідатори `$jsonSchema`.
+- **Оптимістична конкурентність**: `ReplaceOne({ _id, version: очікувана })`; якщо `MatchedCount = 0` — `ConflictException` → 409.
+  `GET` повертає версію в `ETag`, `PUT`/`DELETE` приймають `If-Match`.
+- **Індекси** створює `IndexCreationService` при старті: складені (`restaurantId+createdAt`, `dishId+rating`
+  partial, `author.customerId+createdAt`), **unique** (`ux_reviews_author_target` — один відгук від клієнта на ціль,
+  `ux_reviews_order_target`), **text** (`tx_reviews_text`), а також для `discussions` і `messages`.
+- **Сідінг**: `IDataSeeder` на кожну колекцію (`ReviewSeeder`, `DiscussionSeeder`), `InsertManyAsync`, перевірка
+  наявності даних → повторний запуск не дублює. Вимикається `MongoDb:Seed=false` (у Production вимкнено).
+- Health check: `GET /health` (команда `ping`).
+
+### 11.6. Помилки (ProblemDetails)
+
+| Виняток | HTTP |
+|---------|------|
+| `NotFoundException` | 404 |
+| `ValidationException` (FluentValidation) | 400 (`ValidationProblemDetails`, помилки по полях) |
+| `DomainException` | 400 |
+| `ConflictException` (конфлікт версій) | 409 |
+| `MongoWriteException` / `MongoBulkWriteException` з `DuplicateKey` | 409 |
+| інші `MongoWriteException` | 400 |
+| `MongoConnectionException`, `TimeoutException` (MongoDB недоступна) | 503 |
+
+### 11.7. Запуск
+
+```bash
+dotnet run --project Platform.AppHost      # Aspire: + контейнер mongo, ресурс ReviewsDb, reviews-api
+```
+
+Без Aspire (MongoDB з Лаб. 01 — `db/deploy.ps1`, `localhost:27017`):
+`dotnet run --project Services/Reviews/Reviews.WebApi` → `http://localhost:5100/swagger`.
+Сервіс працює і з базою Лаб. 01: імена й параметри індексів збігаються, seed пропускається, якщо дані вже є.
+
+### 11.8. Приклади перевірки
+
+```bash
+API=http://localhost:5100
+
+curl "$API/api/reviews?restaurantId=1&sortBy=rating&sortDir=desc&page=1&pageSize=5"   # пагінація в MongoDB
+curl "$API/api/reviews?search=бринза"                                                 # text-індекс
+curl "$API/api/reviews/restaurants/1/rating"                                          # $match → $group
+curl -i "$API/api/reviews/not-an-id"                                                  # 400: невалідний ObjectId
+curl -i "$API/api/reviews/66a000000000000000000fff"                                   # 404
+
+# 201 + Location: /api/reviews/<рядковий ObjectId>
+curl -i -X POST "$API/api/reviews" -H "Content-Type: application/json" -d '{"targetType":"dish","restaurantId":2,"restaurantName":"Pizza Pronto","dishId":202,"dishName":"Піца Чотири сири 30 см","customerId":2,"authorName":"Андрій М.","rating":5,"text":"Сиру не шкодують!"}'
+# те саме ще раз → 400 "You have already reviewed this target" (асинхронний валідатор з запитом до MongoDB)
+
+# Rating = 10 і відгук на страву без dishId → 400 з УСІМА помилками; у лозі: "rejected by validation — handler was NOT executed"
+curl -i -X POST "$API/api/reviews" -H "Content-Type: application/json" -d '{"targetType":"dish","restaurantId":1,"restaurantName":"Буковинська хата","customerId":3,"authorName":"Ірина Б.","rating":10}'
+
+# конфлікт версій: GET дає ETag "0"; PUT з If-Match "0" → 200 (версія стає 1); ще раз з "0" → 409
+curl -i -X PUT "$API/api/reviews/<id>" -H "Content-Type: application/json" -H 'If-Match: "0"' -d '{"rating":4,"text":"Оновлено"}'
+```
+
+У `mongosh`:
+
+```javascript
+use smakoviz_feedback
+db.reviews.find().limit(1)      // camelCase, вкладені author і comments, rating — число, version; без _t і приватних полів
+db.reviews.getIndexes()         // ix_reviews_*, ux_reviews_author_target, ux_reviews_order_target, tx_reviews_text
+```
+
+### 11.9. Знімки екрана
+
+| Swagger | Документ у Compass | `db.reviews.getIndexes()` |
+|---------|--------------------|---------------------------|
+| ![](docs/screenshots/lab04-swagger.png) | ![](docs/screenshots/lab04-compass.png) | ![](docs/screenshots/lab04-indexes.png) |

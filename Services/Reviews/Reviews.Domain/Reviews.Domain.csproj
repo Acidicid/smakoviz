@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Domain (Core): сутності, Value Objects, доменні винятки, інтерфейси репозиторіїв.
+       НЕ посилається на жоден інший проєкт рішення і НЕ має драйвера MongoDB:
+       лише пакет MongoDB.Bson заради типу ObjectId (ідентифікатор документа). -->
+
+  <ItemGroup>
+    <PackageReference Include="MongoDB.Bson" Version="3.*" />
+  </ItemGroup>
+</Project>

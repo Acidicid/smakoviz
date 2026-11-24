@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Infrastructure (Persistence): MongoDB — контекст, BSON-мапінг, репозиторії, запити читання,
+       сідінг і створення індексів. Реалізує інтерфейси з Domain та Application. -->
+
+  <ItemGroup>
+    <PackageReference Include="MongoDB.Driver" Version="3.*" />
+    <PackageReference Include="MongoDB.Bson" Version="3.*" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Reviews.Application\Reviews.Application.csproj" />
+    <ProjectReference Include="..\Reviews.Domain\Reviews.Domain.csproj" />
+  </ItemGroup>
+</Project>

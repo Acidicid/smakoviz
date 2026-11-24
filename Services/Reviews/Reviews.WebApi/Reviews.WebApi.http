@@ -1,0 +1,77 @@
+### SmakoViz Reviews API — ручні запити
+@api = http://localhost:5100
+
+### Список відгуків ресторану 1, найкращі першими (пагінація в MongoDB)
+GET {{api}}/api/reviews?restaurantId=1&sortBy=rating&sortDir=desc&page=1&pageSize=5
+
+### Повнотекстовий пошук (text-індекс)
+GET {{api}}/api/reviews?search=бринза
+
+### Рейтинг ресторану 1 (aggregation pipeline: $match → $group)
+GET {{api}}/api/reviews/restaurants/1/rating
+
+### Невалідний ObjectId → 400 (валідатор у pipeline, обробник не викликається)
+GET {{api}}/api/reviews/not-an-id
+
+### Неіснуючий Id → 404
+GET {{api}}/api/reviews/66a000000000000000000fff
+
+### Новий відгук → 201 + Location: /api/reviews/{ObjectId}
+POST {{api}}/api/reviews
+Content-Type: application/json
+
+{
+  "targetType": "dish",
+  "restaurantId": 2,
+  "restaurantName": "Pizza Pronto",
+  "dishId": 202,
+  "dishName": "Піца Чотири сири 30 см",
+  "customerId": 2,
+  "authorName": "Андрій М.",
+  "rating": 5,
+  "text": "Сиру не шкодують!"
+}
+
+### Той самий клієнт, та сама страва ще раз → 400 «already reviewed» (асинхронний валідатор з запитом до MongoDB)
+POST {{api}}/api/reviews
+Content-Type: application/json
+
+{
+  "targetType": "dish", "restaurantId": 2, "restaurantName": "Pizza Pronto",
+  "dishId": 202, "dishName": "Піца Чотири сири 30 см",
+  "customerId": 2, "authorName": "Андрій М.", "rating": 4
+}
+
+### Rating = 10 і відгук на страву без dishId → 400 з усіма помилками разом
+POST {{api}}/api/reviews
+Content-Type: application/json
+
+{ "targetType": "dish", "restaurantId": 1, "restaurantName": "Буковинська хата", "customerId": 3, "authorName": "Ірина Б.", "rating": 10 }
+
+### Редагування з If-Match: підстав Id і версію з ETag попереднього GET; застаріла версія → 409
+PUT {{api}}/api/reviews/REPLACE_WITH_ID
+Content-Type: application/json
+If-Match: "0"
+
+{ "rating": 4, "text": "Оновлений відгук" }
+
+### Коментар у вкладений масив
+POST {{api}}/api/reviews/REPLACE_WITH_ID/comments
+Content-Type: application/json
+
+{ "authorName": "Pizza Pronto", "text": "Дякуємо за відгук!" }
+
+### Обговорення: відкрити → 201
+POST {{api}}/api/discussions
+Content-Type: application/json
+
+{ "restaurantId": 2, "restaurantName": "Pizza Pronto", "title": "Чи є безглютенове тісто?" }
+
+### Повідомлення в обговорення → 201
+POST {{api}}/api/discussions/REPLACE_WITH_DISCUSSION_ID/messages
+Content-Type: application/json
+
+{ "customerId": 1, "authorName": "Олена К.", "role": "customer", "text": "Цікавить і для дітей" }
+
+### Health check MongoDB
+GET {{api}}/health

@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Application (Use Cases): команди й запити MediatR (CQRS), pipeline behaviors, валідатори,
+       DTO, профілі AutoMapper, інтерфейси читання (IReviewQueries). Залежить ЛИШЕ від Domain. -->
+
+  <ItemGroup>
+    <!-- MediatR 13+ і AutoMapper 15+ — Lucky Penny Software, безкоштовна Community-ліцензія (один ключ на обидва) -->
+    <PackageReference Include="MediatR" Version="13.*" />
+    <PackageReference Include="AutoMapper" Version="15.*" />
+    <PackageReference Include="FluentValidation" Version="12.*" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="12.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Abstractions" Version="9.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Reviews.Domain\Reviews.Domain.csproj" />
+  </ItemGroup>
+</Project>

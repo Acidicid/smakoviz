@@ -1,5 +1,5 @@
 // =====================================================================
-// SmakoViz · .NET Aspire AppHost — вся система однією командою (SQL Server + delivery-api + menu-api).
+// SmakoViz · .NET Aspire AppHost — вся система однією командою (SQL Server, MongoDB, delivery-api, menu-api, reviews-api).
 //   dotnet run --project Platform.AppHost
 // Відкрий посилання на Dashboard з консолі: там SQL Server і delivery-api мають бути Running.
 // =====================================================================
@@ -32,6 +32,20 @@ builder.AddProject<Projects.Delivery_Api>("delivery-api")
 builder.AddProject<Projects.Menu_Api>("menu-api")
     .WithReference(menuDb)
     .WaitFor(menuDb)
+    .WithExternalHttpEndpoints();
+
+// Сервіс «Відгуки» (Лаб. 04, Clean Architecture + CQRS): MongoDB у контейнері.
+// Ім'я ресурсу "ReviewsDb" → ConnectionStrings__ReviewsDb, який Reviews.Infrastructure ставить
+// поверх секції MongoDb з appsettings. Індекси й seed-дані сервіс створює сам при старті.
+var mongo = builder.AddMongoDB("mongo")
+    .WithDataVolume("smakoviz-reviews-mongo")
+    .WithLifetime(ContainerLifetime.Persistent);
+
+var reviewsDb = mongo.AddDatabase("ReviewsDb", databaseName: "smakoviz_feedback");
+
+builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+    .WithReference(reviewsDb)
+    .WaitFor(reviewsDb)
     .WithExternalHttpEndpoints();
 
 builder.Build().Run();

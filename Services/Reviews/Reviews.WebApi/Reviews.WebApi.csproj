@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <!-- WebApi (Presentation): контролери (лише ISender), Program.cs, обробка помилок, Swagger.
+       Залежить від Application (команди/запити) та Infrastructure (ЛИШЕ для реєстрації DI на старті). -->
+
+  <PropertyGroup>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <UserSecretsId>smakoviz-reviews-api</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Reviews.Application\Reviews.Application.csproj" />
+    <ProjectReference Include="..\Reviews.Infrastructure\Reviews.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

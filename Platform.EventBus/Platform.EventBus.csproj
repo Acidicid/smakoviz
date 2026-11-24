@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Лаб. 08: спільна інфраструктура асинхронного обміну подіями через RabbitMQ:
+       топологія (topic exchange, черги, DLX/DLQ), IEventPublisher, базовий consumer (BackgroundService),
+       передача CorrelationId і W3C traceparent через заголовки повідомлень.
+       Контракти подій тут НЕ лежать — кожен сервіс має власні record-и (зв'язок лише через JSON). -->
+
+  <ItemGroup>
+    <!-- IConnection з DI, health check і трасування; усередині — RabbitMQ.Client 7.x (асинхронний IChannel) -->
+    <PackageReference Include="Aspire.RabbitMQ.Client.v7" Version="9.5.*" />
+    <!-- Propagators.DefaultTextMapPropagator: Inject/Extract traceparent -->
+    <PackageReference Include="OpenTelemetry.Api" Version="1.12.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.*" />
+  </ItemGroup>
+</Project>

@@ -1,6 +1,8 @@
 using Reviews.Application;
 using Reviews.Application.Caching;
 using Reviews.Grpc;
+using Reviews.WebApi.IntegrationEvents;
+using Platform.EventBus;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Reviews.Application.Common.Mappings;
 using Reviews.Infrastructure;
@@ -59,6 +61,11 @@ var healthChecks = builder.Services.AddHealthChecks()
 if (redisEnabled)
     healthChecks.AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded, ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));
 builder.Services.AddGrpcHealthChecks();   // gRPC Health Checking Protocol
+
+// ---------- Лаб. 08: RabbitMQ — споживач подій «Меню» (денормалізована назва страви у відгуках) ----------
+builder.AddRabbitMQClient("messaging");
+builder.Services.AddEventConsumer(ReviewsRoutingKeys.Queue, consumer => consumer
+    .Subscribe<DishUpdatedIntegrationEvent, DishUpdatedIntegrationEventHandler>(ReviewsRoutingKeys.DishUpdated));
 
 // ---------- Swagger ----------
 builder.Services.AddEndpointsApiExplorer();

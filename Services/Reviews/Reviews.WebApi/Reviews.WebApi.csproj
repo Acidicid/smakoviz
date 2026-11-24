@@ -29,4 +29,8 @@
     <!-- Лаб. 06: контракт gRPC; Server — генерується ReviewsService.ReviewsServiceBase -->
     <Protobuf Include="Protos\reviews.proto" GrpcServices="Server" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Лаб. 08: RabbitMQ — споживання подій «Меню» -->
+    <ProjectReference Include="..\..\..\Platform.EventBus\Platform.EventBus.csproj" />
+  </ItemGroup>
 </Project>

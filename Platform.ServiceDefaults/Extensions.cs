@@ -49,6 +49,9 @@ public static class Extensions
     /// <summary>Meter метрик кешу (cache.hits / cache.misses з тегом cache.level = L1 | L2) — Лаб. 06.</summary>
     public const string CacheMeterName = "SmakoViz.Cache";
 
+    /// <summary>ActivitySource шини подій (Platform.EventBus) — spans Producer / Consumer з тегами messaging.* (Лаб. 08).</summary>
+    public const string EventBusActivitySource = "SmakoViz.EventBus";
+
     public static TBuilder AddServiceDefaults<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.ConfigureSerilog();              // 4.1 — Serilog як основний провайдер
@@ -147,6 +150,7 @@ public static class Extensions
                 .AddSource(builder.Environment.ApplicationName)   // власні spans сервісу
                 .AddSource("SmakoViz.*")                          // бізнес-операції: SmakoViz.Delivery, .Menu, .Reviews, .Aggregator
                 .AddSource(MongoActivitySource)                   // MongoDB (Лаб. 04)
+                .AddSource(EventBusActivitySource)                // Лаб. 08: publish / process подій (traceparent через RabbitMQ)
                 // серверні gRPC-виклики: span ASP.NET Core з атрибутами rpc.service / rpc.method
                 .AddAspNetCoreInstrumentation(options =>
                     // health-запити Dashboard не засмічують трасування

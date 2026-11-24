@@ -1,5 +1,6 @@
 using FluentValidation;
 using Menu.Api.HealthChecks;
+using Menu.Api.IntegrationEvents;
 using Menu.Api.Infrastructure;
 using Menu.Api.Metrics;
 using Menu.Bll.Caching;
@@ -8,7 +9,9 @@ using Menu.Bll.Services;
 using Menu.Bll.Validation;
 using Menu.Dal.Context;
 using Menu.Dal.Repositories;
+using Menu.Dal.Messaging;
 using Menu.Dal.Seeding;
+using Platform.EventBus;
 using Menu.Grpc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
@@ -39,7 +42,8 @@ builder.Services.AddScoped<DishService>();
 builder.Services.AddScoped<CategoryService>();
 builder.Services.AddScoped<IRestaurantService, CachedRestaurantService>();
 builder.Services.AddScoped<CachedDishService>();
-// Лаб. 07: зовнішній шар — метрики (InstrumentedDishService → CachedDishService → DishService)
+builder.Services.AddScoped<PublishingDishService>();   // Лаб. 08: події після успішного SaveChanges
+// Лаб. 07: зовнішній шар — метрики (InstrumentedDishService → PublishingDishService → CachedDishService → DishService)
 builder.Services.AddScoped<IDishService, InstrumentedDishService>();
 builder.Services.AddSingleton<MenuMetrics>();   // Meter "Menu.Api"
 builder.Services.AddScoped<ICategoryService, CachedCategoryService>();
@@ -74,6 +78,14 @@ if (redisEnabled)
     healthChecks.AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded,       // кеш необов'язковий
         ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));
 builder.Services.AddGrpcHealthChecks();   // gRPC Health Checking Protocol
+
+// ---------- Лаб. 08: RabbitMQ ----------
+// Aspire-інтеграція: IConnection (RabbitMQ.Client 7, асинхронний IChannel) + health check + трасування.
+builder.AddRabbitMQClient("messaging");
+builder.Services.AddEventPublisher();   // menu.dish.updated / menu.dish.deleted
+// Споживач: власна черга menu-api.events; OrderPlaced → списати порції (ідемпотентно, dbo.ProcessedEvents)
+builder.Services.AddEventConsumer(MenuRoutingKeys.Queue, consumer => consumer
+    .Subscribe<OrderPlacedIntegrationEvent, OrderPlacedIntegrationEventHandler>(MenuRoutingKeys.OrderPlaced));
 
 // ---------- Лаб. 06: gRPC (HTTP/2 через HTTPS-endpoint, ALPN) + серверний interceptor логування ----------
 builder.Services.AddGrpc(options =>
@@ -116,6 +128,7 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<MenuDbContext>();
     await db.Database.MigrateAsync();
+    await ProcessedEventStore.EnsureCreatedAsync(db);   // Лаб. 08: таблиця ідемпотентності споживача
 
     if (!app.Environment.IsProduction() && app.Configuration.GetValue("Database:Seed", true))
         await DbInitializer.SeedAsync(db, app.Logger);

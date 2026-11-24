@@ -36,4 +36,8 @@
     <!-- Лаб. 06: контракт gRPC; Server — генерується базовий клас MenuService.MenuServiceBase -->
     <Protobuf Include="Protos\menu.proto" GrpcServices="Server" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Лаб. 08: RabbitMQ — публікація подій страв і споживання OrderPlaced -->
+    <ProjectReference Include="..\..\..\Platform.EventBus\Platform.EventBus.csproj" />
+  </ItemGroup>
 </Project>

@@ -12,6 +12,7 @@ WORKDIR /src
 # спершу лише файли проєктів → restore кешується, поки не змінились залежності
 COPY Directory.Build.props ./
 COPY Platform.ServiceDefaults/Platform.ServiceDefaults.csproj Platform.ServiceDefaults/
+COPY Platform.EventBus/Platform.EventBus.csproj Platform.EventBus/
 COPY Services/Menu/Menu.Domain/Menu.Domain.csproj Services/Menu/Menu.Domain/
 COPY Services/Menu/Menu.Dal/Menu.Dal.csproj       Services/Menu/Menu.Dal/
 COPY Services/Menu/Menu.Bll/Menu.Bll.csproj       Services/Menu/Menu.Bll/
@@ -19,6 +20,7 @@ COPY Services/Menu/Menu.Api/Menu.Api.csproj       Services/Menu/Menu.Api/
 RUN dotnet restore Services/Menu/Menu.Api/Menu.Api.csproj
 
 COPY Platform.ServiceDefaults/ Platform.ServiceDefaults/
+COPY Platform.EventBus/ Platform.EventBus/
 COPY Services/Menu/ Services/Menu/
 RUN dotnet publish Services/Menu/Menu.Api/Menu.Api.csproj -c Release -o /app/publish --no-restore
 

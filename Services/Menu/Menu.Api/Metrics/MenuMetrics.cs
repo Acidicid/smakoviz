@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using Menu.Api.IntegrationEvents;
 using Menu.Bll.Caching;
 using Menu.Bll.Dtos;
 using Menu.Bll.Services;
@@ -58,8 +59,8 @@ public sealed class MenuMetrics
             new KeyValuePair<string, object?>("status", success ? "success" : "failure"));
 }
 
-/// <summary>Декоратор метрик: InstrumentedDishService → CachedDishService → DishService. Тривалість — для всіх виконань.</summary>
-public sealed class InstrumentedDishService(CachedDishService inner, MenuMetrics metrics) : IDishService
+/// <summary>Декоратор метрик: InstrumentedDishService → PublishingDishService (Лаб. 08) → CachedDishService → DishService. Тривалість — для всіх виконань.</summary>
+public sealed class InstrumentedDishService(PublishingDishService inner, MenuMetrics metrics) : IDishService
 {
     public Task<PagedResult<DishListItemDto>> GetListAsync(DishQuery query, CancellationToken ct = default)
         => Measure("list", () => inner.GetListAsync(query, ct));

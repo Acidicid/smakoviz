@@ -35,11 +35,13 @@ public sealed class UnitOfWork : IUnitOfWork
         Customers = new CustomerRepository(_connection, () => _transaction);   // чистий ADO.NET
         Dishes = new DishRepository(_connection, () => _transaction);          // Dapper
         Orders = new OrderRepository(_connection, () => _transaction);         // Dapper + процедури
+        ProcessedEvents = new ProcessedEventRepository(_connection, () => _transaction);   // Лаб. 08
     }
 
     public ICustomerRepository Customers { get; }
     public IDishRepository Dishes { get; }
     public IOrderRepository Orders { get; }
+    public IProcessedEventRepository ProcessedEvents { get; }
 
     public bool HasActiveTransaction => _transaction is not null;
 

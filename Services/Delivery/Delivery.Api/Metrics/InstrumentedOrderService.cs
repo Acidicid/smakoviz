@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Delivery.Api.IntegrationEvents;
 using Delivery.Bll.Caching;
 using Delivery.Bll.Dtos;
 using Delivery.Bll.Services;
@@ -7,11 +8,11 @@ using Delivery.Domain.Models;
 namespace Delivery.Api.Metrics;
 
 /// <summary>
-/// Декоратор метрик над IOrderService (ланцюжок: InstrumentedOrderService → CachedOrderService → OrderService).
+/// Декоратор метрик над IOrderService (ланцюжок: InstrumentedOrderService → PublishingOrderService (Лаб. 08) → CachedOrderService → OrderService).
 /// Тривалість записується для КОЖНОГО виконання — і успішного, і невдалого (інакше картина викривлена);
 /// лічильники збільшуються одразу ПІСЛЯ успішної операції. Працює і для REST, і для gRPC.
 /// </summary>
-public sealed class InstrumentedOrderService(CachedOrderService inner, DeliveryMetrics metrics) : IOrderService
+public sealed class InstrumentedOrderService(PublishingOrderService inner, DeliveryMetrics metrics) : IOrderService
 {
     public Task<OrderDto> GetByIdAsync(long id, CancellationToken ct = default)
         => Measure("get", () => inner.GetByIdAsync(id, ct));

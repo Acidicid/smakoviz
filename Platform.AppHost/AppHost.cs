@@ -25,6 +25,14 @@ var redis = builder.AddRedis("redis")
     .WithDataVolume("smakoviz-redis")
     .WithLifetime(ContainerLifetime.Persistent);
 
+// ---------- Лаб. 08: RabbitMQ — асинхронні інтеграційні події між сервісами ----------
+// Volume — durable-черги й persistent-повідомлення переживають перезапуск контейнера;
+// Management UI (http://localhost:15672 або посилання в Dashboard) — exchange-і, черги, DLQ, ручна перевірка.
+var messaging = builder.AddRabbitMQ("messaging")
+    .WithDataVolume("smakoviz-rabbitmq")
+    .WithManagementPlugin()
+    .WithLifetime(ContainerLifetime.Persistent);
+
 // Кожен мікросервіс — СВОЯ база (Лаб. 01), хоч і на одному сервері SQL у розробці.
 var deliveryDb = sql.AddDatabase("DeliveryDb", databaseName: "SmakoViz_Delivery");   // Проєкт №1 — ADO.NET + Dapper
 var menuDb = sql.AddDatabase("MenuDb", databaseName: "SmakoViz_Menu");               // Проєкт №2 — EF Core
@@ -39,7 +47,9 @@ var delivery = builder.AddProject<Projects.Delivery_Api>("delivery-api", launchP
     .WithReference(deliveryDb)
     .WaitFor(deliveryDb)
     .WithReference(redis)
-    .WaitFor(redis)                              // API стартує, коли база готова
+    .WaitFor(redis)
+    .WithReference(messaging)   // Лаб. 08: публікує OrderPlaced, споживає menu.dish.*
+    .WaitFor(messaging)
     .WithEnvironment("Database__Initialize", "true")  // застосувати schema/procedures/seed з Лаб. 01
     // Лаб. 07: Dashboard показує Healthy/Degraded/Unhealthy, а WaitFor(delivery) чекає ЗДОРОВИЙ сервіс, а не лише запущений
     .WithHttpHealthCheck("/health/ready", endpointName: "http")
@@ -52,6 +62,8 @@ var menu = builder.AddProject<Projects.Menu_Api>("menu-api", launchProfileName: 
     .WaitFor(menuDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithReference(messaging)   // Лаб. 08: публікує menu.dish.*, споживає OrderPlaced
+    .WaitFor(messaging)
     .WithHttpHealthCheck("/health/ready", endpointName: "http")
     .WithExternalHttpEndpoints();
 
@@ -69,6 +81,8 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api", launchP
     .WaitFor(reviewsDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithReference(messaging)   // Лаб. 08: споживає menu.dish.updated
+    .WaitFor(messaging)
     .WithHttpHealthCheck("/health/ready", endpointName: "http")
     .WithExternalHttpEndpoints();
 

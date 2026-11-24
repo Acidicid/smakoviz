@@ -1,4 +1,5 @@
 using Delivery.Api.HealthChecks;
+using Delivery.Api.IntegrationEvents;
 using Delivery.Api.Infrastructure;
 using Delivery.Api.Metrics;
 using Delivery.Bll.Caching;
@@ -6,7 +7,9 @@ using Delivery.Bll.Mapping;
 using Delivery.Bll.Services;
 using Delivery.Dal.Abstractions;
 using Delivery.Dal.Infrastructure;
+using Delivery.Dal.Repositories;
 using Delivery.Grpc;
+using Platform.EventBus;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,6 +35,7 @@ builder.Services.AddScoped<DishService>();
 builder.Services.AddScoped<OrderService>();
 builder.Services.AddScoped<IDishService, CachedDishService>();
 builder.Services.AddScoped<CachedOrderService>();
+builder.Services.AddScoped<PublishingOrderService>();   // Лаб. 08: OrderPlaced після COMMIT
 // Лаб. 07: зовнішній шар — метрики (InstrumentedOrderService → CachedOrderService → OrderService)
 builder.Services.AddScoped<IOrderService, InstrumentedOrderService>();
 
@@ -65,6 +69,15 @@ if (redisEnabled)
     healthChecks.AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded,       // кеш необов'язковий
         ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));
 builder.Services.AddGrpcHealthChecks();   // gRPC Health Checking Protocol на основі тих самих перевірок
+
+// ---------- Лаб. 08: RabbitMQ ----------
+// Aspire-інтеграція: IConnection (RabbitMQ.Client 7, асинхронний IChannel) + health check + трасування.
+builder.AddRabbitMQClient("messaging");
+builder.Services.AddEventPublisher();   // delivery.order.placed
+// Споживач: черга delivery-api.events — реплікація локального довідника страв з «Меню»
+builder.Services.AddEventConsumer(DeliveryRoutingKeys.Queue, consumer => consumer
+    .Subscribe<DishUpdatedIntegrationEvent, DishUpdatedIntegrationEventHandler>(DeliveryRoutingKeys.DishUpdated)
+    .Subscribe<DishDeletedIntegrationEvent, DishDeletedIntegrationEventHandler>(DeliveryRoutingKeys.DishDeleted));
 
 // ---------- Лаб. 06: gRPC + серверний interceptor логування (зі ServiceDefaults) ----------
 builder.Services.AddGrpc(options =>
@@ -100,6 +113,9 @@ var app = builder.Build();
 // ---------- Розгортання БД скриптами Лаб. 01 (для порожнього контейнера Aspire) ----------
 if (app.Configuration.GetValue<bool>("Database:Initialize"))
     await DatabaseInitializer.InitializeAsync(connectionString, app.Logger);
+
+// Лаб. 08: таблиця ідемпотентності споживача (IF OBJECT_ID … IS NULL CREATE TABLE)
+await ProcessedEventRepository.EnsureCreatedAsync(connectionString);
 
 app.UseMiddleware<CorrelationIdMiddleware>();   // зі ServiceDefaults
 app.UseExceptionHandler();

@@ -32,4 +32,8 @@
     <!-- Лаб. 06: контракт gRPC; Server — генерується DeliveryService.DeliveryServiceBase -->
     <Protobuf Include="Protos\delivery.proto" GrpcServices="Server" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Лаб. 08: RabbitMQ — публікація OrderPlaced і реплікація страв з «Меню» -->
+    <ProjectReference Include="..\..\..\Platform.EventBus\Platform.EventBus.csproj" />
+  </ItemGroup>
 </Project>

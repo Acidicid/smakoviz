@@ -59,11 +59,21 @@ public interface IOrderRepository : IGenericRepository<DeliveryOrder>
 /// тому або зберігаються зміни всіх репозиторіїв, або жодного.
 /// Реєструється в DI як Scoped — один екземпляр на HTTP-запит.
 /// </summary>
+/// <summary>Оброблені інтеграційні події (Лаб. 08): ідемпотентність споживача.</summary>
+public interface IProcessedEventRepository
+{
+    Task<bool> IsProcessedAsync(Guid eventId, CancellationToken ct = default);
+
+    /// <summary>false — подію вже оброблено (порушення PRIMARY KEY).</summary>
+    Task<bool> TryMarkProcessedAsync(Guid eventId, string eventType, string consumer, CancellationToken ct = default);
+}
+
 public interface IUnitOfWork : IAsyncDisposable
 {
     ICustomerRepository Customers { get; }
     IDishRepository Dishes { get; }
     IOrderRepository Orders { get; }
+    IProcessedEventRepository ProcessedEvents { get; }
 
     bool HasActiveTransaction { get; }
 

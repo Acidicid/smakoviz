@@ -10,6 +10,7 @@
 | Лаб. 05 | Платформа .NET Aspire: ServiceDefaults (Serilog + OpenTelemetry + CorrelationId), API Gateway (YARP), Aggregator (Task.WhenAll, часткові відмови) | [розділ 12](#12-лаб-05--платформа-net-aspire-gateway-aggregator-observability) |
 | Лаб. 06 | Кешування L1 (IMemoryCache) + L2 (Redis), gRPC-контракти й сервіси, Aggregator на gRPC, метрики кешу | [розділ 13](#13-лаб-06--grpc-і-кешування-l1--l2) |
 | Лаб. 07 | Resilience (retry, circuit breaker, таймаути; критичні vs некритичні), бізнес-метрики, health checks (live / ready) | [розділ 14](#14-лаб-07--resilience-метрики-health-checks) |
+| Лаб. 08 | RabbitMQ: integration events, topic exchange + DLX/DLQ, ідемпотентні споживачі, реплікація копій, traceparent через брокер | [розділ 15](#15-лаб-08--інтеграційні-події-через-rabbitmq) |
 
 ## 1. Предметна область
 
@@ -204,6 +205,8 @@ Services/*/*.Bll/Caching/, Reviews.Application/Caching/  дворівневий 
 Services/*/*.Api/Metrics/       бізнес-метрики (Meter = назва сервісу) + декоратори вимірювання       (Лаб. 07)
 Services/*/*.Api/HealthChecks/  SQL Server (SELECT 1), Redis (PING, Degraded)                         (Лаб. 07)
 Platform.Aggregator/Resilience/, HealthChecks/  політики критичних/некритичних клієнтів, gRPC health    (Лаб. 07)
+Platform.EventBus/   RabbitMQ: топологія (topic + DLX/DLQ), IEventPublisher, consumer (BackgroundService)  (Лаб. 08)
+Services/*/*.Api/IntegrationEvents/  події, publisher-декоратори, обробники                             (Лаб. 08)
 Services/
   Delivery/          мікросервіс «Доставка» = Проєкт №1 (ADO.NET + Dapper)     (Лаб. 02)
     Delivery.Api/      контролери, Program.cs, appsettings.json, Swagger, Serilog
@@ -1113,3 +1116,63 @@ curl "$GW/api/aggregator/restaurants/1?noCache=true"
 # 5) серія збоїв → OnCircuitOpened (лог "Circuit to reviews-api OPENED"), далі запити відхиляються миттєво
 for i in $(seq 1 15); do curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" "$GW/api/aggregator/restaurants/1?noCache=true&transport=http"; done
 ```
+
+## 15. Лаб. 08 — інтеграційні події через RabbitMQ
+
+### 15.1 Потоки подій
+
+```
+ menu-api ──menu.dish.updated / menu.dish.deleted──►┐                         ┌─► delivery-api.events ─► оновлення локального довідника dbo.Dishes
+ (власник страв)                                    │   smakoviz.events       │                          (ціни в оформлених позиціях НЕ змінюються)
+                                                    ├──► (topic, durable) ────┼─► reviews-api.events  ─► dishName у всіх відгуках страви (UpdateMany)
+ delivery-api ──delivery.order.placed──────────────►┘                         └─► menu-api.events     ─► списання порцій (+ нова menu.dish.updated)
+ (власник замовлень)
+                    кожна черга: x-dead-letter-exchange = smakoviz.dlx ──► <черга>.dlq
+```
+
+| Подія | Публікує (після COMMIT) | Споживає | Що робить споживач |
+|---|---|---|---|
+| `DishUpdatedIntegrationEvent` (`menu.dish.updated`) | menu-api: створення, ціна, порції, доступність | delivery-api, reviews-api | MERGE копії страви / нова `dishName` у відгуках |
+| `DishDeletedIntegrationEvent` (`menu.dish.deleted`) | menu-api | delivery-api | страва в копії стає недоступною |
+| `OrderPlacedIntegrationEvent` (`delivery.order.placed`) | delivery-api (не для повтору з тим самим Idempotency-Key) | menu-api | `RemovePortions` для кожної позиції |
+
+### 15.2 Що де реалізовано
+
+| Вимога | Де |
+|---|---|
+| `AddRabbitMQ("messaging").WithDataVolume().WithManagementPlugin()`, `WithReference/WaitFor` для 3 сервісів | `Platform.AppHost/AppHost.cs` |
+| `builder.AddRabbitMQClient("messaging")` (Aspire.RabbitMQ.Client, RabbitMQ.Client 7, async `IChannel`, health check) | `Program.cs` сервісів |
+| Топологія при старті: durable topic exchange, окрема черга на сервіс, `x-dead-letter-exchange`, DLQ прив'язана до DLX | `Platform.EventBus/EventBusTopology.cs` |
+| Незмінні події: базовий record `EventId`, `OccurredAt`, `CorrelationId`, `Version`; назви в минулому часі; самодостатні | `Platform.EventBus/IntegrationEvent.cs`, `*/IntegrationEvents/*IntegrationEvents.cs` |
+| `IEventPublisher`: camelCase JSON, `Persistent`, `ContentType`, `MessageId = EventId`, `Type`, `x-correlation-id`, лог публікації | `Platform.EventBus/EventPublisher.cs` |
+| Публікація лише після успішного збереження | `PublishingDishService`, `PublishingOrderService` (декоратори: inner → SaveChanges/COMMIT → PublishAsync) |
+| Consumer як `BackgroundService`: `BasicQosAsync`, `AsyncEventingBasicConsumer`, `BasicConsumeAsync(autoAck: false)`, зупинка за `stoppingToken` | `Platform.EventBus/EventConsumer.cs` |
+| Ack після успіху; некоректний JSON / несумісна версія / `PermanentEventException` → `Nack(requeue: false)` → DLQ; рішення логуються | `RabbitMqEventConsumer.HandleDeliveryAsync` |
+| Повтори: копія з `x-retry-count + 1`, оригінал Ack; після `MaxRetryAttempts = 3` → DLQ | `RabbitMqEventConsumer.RetryAsync` |
+| Ідемпотентність: окремий обробник на тип події в scope повідомлення; `EventId` — PRIMARY KEY у `dbo.ProcessedEvents` у тій самій транзакції | Delivery: `ProcessedEventRepository` + `DishReplica.ApplyAsync`; Menu: `Menu.Dal/Messaging/ProcessedEventStore.cs` + `OrderPlacedIntegrationEventHandler`; Reviews: колекція `processed_events` |
+| W3C `traceparent`: Inject при публікації, Extract у споживачі, Activity `Consumer` з тегами `messaging.*`; `AddSource` у ServiceDefaults | `EventPublisher.cs`, `EventConsumer.cs`, `Extensions.cs` (`EventBusActivitySource`) |
+| Структуровані логи з EventId, типом події, Id сутностей, CorrelationId | scope логера в consumer + логи обробників |
+
+**Outbox (наступний крок):** зараз між COMMIT і публікацією є маленьке вікно. Якщо брокер недоступний саме в цю мить,
+зміна збережеться, а подія — ні; це логується як Error. Transactional Outbox прибирає вікно: подію пишемо в таблицю
+outbox тією ж транзакцією, а фоновий процес відправляє її в брокер.
+
+### 15.3 Перевірка
+
+1. `dotnet run --project Platform.AppHost` → у Dashboard ресурс **messaging** (RabbitMQ). Посилання **management**
+   (логін і пароль — у Dashboard → messaging → Parameters) → Exchanges: `smakoviz.events`, `smakoviz.dlx`;
+   Queues: `delivery-api.events`, `menu-api.events`, `reviews-api.events` і їхні `.dlq`.
+2. **Реплікація ціни:**
+   ```bash
+   GW=http://localhost:5000
+   curl -X PUT $GW/api/menu/dishes/201/price -H "Content-Type: application/json" -d '{"newPrice":215}'
+   curl $GW/api/delivery/dishes/201        # ціна в копії «Доставки» вже 215
+   ```
+3. **Списання порцій:** оформи замовлення (`POST /api/delivery/orders`), потім `GET /api/menu/dishes/201` →
+   `availablePortions` зменшилось. У Traces один trace: `POST /api/delivery/orders → smakoviz.events publish →
+   menu-api.events process → SQL`.
+4. **Ідемпотентність:** у Management UI → `menu-api.events` → Publish message вручну з тим самим `message_id`/тілом →
+   у лозі `already processed`, порції не списуються вдруге.
+5. **DLQ:** Publish message у `smakoviz.events` з routing key `delivery.order.placed` і тілом `not json` →
+   повідомлення в `menu-api.events.dlq`, у лозі `sent to DLQ … invalid JSON`.
+6. **Повтори:** зупини SQL Server → зміни ціну страви → у лозі «Доставки» `retry 1/2`, `retry 2/2`, потім DLQ.

@@ -3,16 +3,11 @@ using Delivery.Bll.Mapping;
 using Delivery.Bll.Services;
 using Delivery.Dal.Abstractions;
 using Delivery.Dal.Infrastructure;
-using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- Логування: Serilog (налаштування — у секції "Serilog" appsettings.json) ----------
-builder.Host.UseSerilog((ctx, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .Enrich.FromLogContext()
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {Message:lj}{NewLine}{Exception}"));
+// ---------- Лаб. 05: ServiceDefaults — Serilog, OpenTelemetry, health checks, service discovery ----------
+builder.AddServiceDefaults();
 
 // ---------- Рядок підключення ----------
 // appsettings.json → ConnectionStrings:DeliveryDb; перевизначається змінною оточення
@@ -58,8 +53,7 @@ var app = builder.Build();
 if (app.Configuration.GetValue<bool>("Database:Initialize"))
     await DatabaseInitializer.InitializeAsync(connectionString, app.Logger);
 
-app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseSerilogRequestLogging();
+app.UseMiddleware<CorrelationIdMiddleware>();   // зі ServiceDefaults
 app.UseExceptionHandler();
 app.UseStatusCodePages();   // 404 на неіснуючий маршрут теж у форматі ProblemDetails
 
@@ -70,6 +64,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapDefaultEndpoints();   // /health і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();

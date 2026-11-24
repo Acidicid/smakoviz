@@ -7,7 +7,7 @@ namespace Menu.Api.Controllers;
 
 /// <summary>Ресторани-партнери.</summary>
 [ApiController]
-[Route("api/restaurants")]
+[Route("api/menu/restaurants")]
 [Produces("application/json")]
 public class RestaurantsController(IRestaurantService restaurants) : ControllerBase
 {

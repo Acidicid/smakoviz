@@ -9,7 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
   </ItemGroup>
 
@@ -18,5 +17,10 @@
     <!-- Dal потрібен ЛИШЕ Program.cs (composition root): зареєструвати UnitOfWork у DI.
          Контролери працюють тільки з сервісами BLL і про репозиторії не знають. -->
     <ProjectReference Include="..\Delivery.Dal\Delivery.Dal.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Лаб. 05: Serilog, OpenTelemetry, health checks, service discovery — централізовано -->
+    <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
 </Project>

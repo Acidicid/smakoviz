@@ -8,7 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
     <!-- потрібен інструменту dotnet-ef у стартовому проєкті (міграції) -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.*">
@@ -22,5 +21,10 @@
     <!-- Dal потрібен ЛИШЕ Program.cs (composition root): AddDbContext, UnitOfWork, міграції й сідінг.
          Контролери працюють тільки з сервісами BLL і DbContext не бачать. -->
     <ProjectReference Include="..\Menu.Dal\Menu.Dal.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Лаб. 05: Serilog, OpenTelemetry, health checks, service discovery — централізовано -->
+    <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
 </Project>

@@ -9,20 +9,11 @@ using Menu.Dal.Seeding;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Serilog;
-using Serilog.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- Serilog: структуровані логи (властивості як ключі), sink — консоль ----------
-// Рівні й override-и — у секції "Serilog" appsettings.json. SQL-команди EF Core логуються на рівні
-// Information (Microsoft.EntityFrameworkCore.Database.Command) — видно, що Eager = 1 запит, Explicit = кілька.
-builder.Host.UseSerilog((ctx, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .MinimumLevel.Override("Microsoft.EntityFrameworkCore.Database.Command", LogEventLevel.Information)
-    .Enrich.FromLogContext()
-    .Enrich.WithProperty("Service", "menu-api")
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {SourceContext}: {Message:lj}{NewLine}{Exception}"));
+// ---------- Лаб. 05: ServiceDefaults — Serilog, OpenTelemetry, health checks, service discovery ----------
+builder.AddServiceDefaults();
 
 // ---------- EF Core ----------
 // Рядок підключення: appsettings.json → ConnectionStrings:MenuDb (Aspire передає ConnectionStrings__MenuDb)
@@ -79,10 +70,10 @@ if (app.Configuration.GetValue("Database:MigrateOnStartup", true))
         await DbInitializer.SeedAsync(db, app.Logger);
 }
 
-app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseMiddleware<CorrelationIdMiddleware>();   // зі ServiceDefaults
 app.UseSerilogRequestLogging(options =>
 {
-    // додаткові структуровані властивості в рядку «HTTP GET /api/dishes responded 200 in 12 ms»
+    // додаткові структуровані властивості в рядку «HTTP GET /api/menu/dishes responded 200 in 12 ms»
     options.EnrichDiagnosticContext = (diagnostics, http) =>
     {
         diagnostics.Set("RequestPath", http.Request.Path.Value ?? "");
@@ -99,6 +90,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapDefaultEndpoints();   // /health і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();

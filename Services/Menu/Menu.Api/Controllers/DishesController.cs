@@ -10,7 +10,7 @@ namespace Menu.Api.Controllers;
 /// ні try/catch — помилки обробляє GlobalExceptionHandler.
 /// </summary>
 [ApiController]
-[Route("api/dishes")]
+[Route("api/menu/dishes")]
 [Produces("application/json")]
 public class DishesController(IDishService dishes) : ControllerBase
 {

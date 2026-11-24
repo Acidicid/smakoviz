@@ -1,4 +1,5 @@
 using System.Data;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using AutoMapper;
@@ -6,11 +7,18 @@ using Delivery.Bll.Dtos;
 using Delivery.Dal.Abstractions;
 using Delivery.Domain.Exceptions;
 using Delivery.Domain.Models;
+using Microsoft.Extensions.Logging;
 
 namespace Delivery.Bll.Services;
 
-public sealed class OrderService(IUnitOfWork uow, IMapper mapper) : IOrderService
+public sealed class OrderService(IUnitOfWork uow, IMapper mapper, ILogger<OrderService> logger) : IOrderService
 {
+    /// <summary>
+    /// Власні spans бізнес-операцій (Лаб. 05). Ім'я джерела підключене в ServiceDefaults через AddSource("SmakoViz.*"),
+    /// тож у Dashboard → Traces видно «PlaceOrder» / «ChangeOrderStatus» над SQL-spans.
+    /// </summary>
+    public static readonly ActivitySource ActivitySource = new("SmakoViz.Delivery");
+
     /// <summary>Бізнес-правило: доставка безкоштовна від цієї суми страв.</summary>
     public const decimal FreeDeliveryThreshold = 500m;
 
@@ -48,6 +56,10 @@ public sealed class OrderService(IUnitOfWork uow, IMapper mapper) : IOrderServic
     public async Task<PlaceOrderResult> PlaceOrderAsync(PlaceOrderDto input, string? idempotencyKey,
         CancellationToken ct = default)
     {
+        using var activity = ActivitySource.StartActivity("PlaceOrder");
+        activity?.SetTag("customer.id", input.CustomerId);
+        activity?.SetTag("order.items_count", input.Items.Count);
+
         var orderNumber = idempotencyKey is null ? NewOrderNumber() : OrderNumberFromKey(idempotencyKey);
 
         // Ідемпотентність: повтор того самого запиту (клієнт не дочекався відповіді й надіслав ще раз)
@@ -114,7 +126,15 @@ public sealed class OrderService(IUnitOfWork uow, IMapper mapper) : IOrderServic
             throw;
         }
 
-        return new PlaceOrderResult(await GetByIdAsync(orderId, ct), Created: true);
+        var placed = await GetByIdAsync(orderId, ct);
+        activity?.SetTag("order.id", orderId);
+        activity?.SetTag("order.status", placed.Status);
+        // Бізнес-подія: лише ідентифікатори й суми — без адреси й телефону (персональні дані)
+        logger.LogInformation(
+            "Order {OrderId} ({OrderNumber}) placed by customer {CustomerId}: {ItemsCount} items, total {TotalAmount}, status {Status}",
+            orderId, placed.OrderNumber, placed.CustomerId, placed.Lines.Count, placed.TotalAmount, placed.Status);
+
+        return new PlaceOrderResult(placed, Created: true);
     }
 
     public async Task<OrderDto> AddLineAsync(long orderId, AddOrderLineDto input, CancellationToken ct = default)
@@ -138,6 +158,9 @@ public sealed class OrderService(IUnitOfWork uow, IMapper mapper) : IOrderServic
         // RowVersion, прочитаний вище, захищає від зміни замовлення між читанням і записом.
         await uow.Orders.ChangeStatusAsync(orderId, OrderStatus.Confirmed, ServiceGuards.CurrentUser,
             "Confirmed by restaurant", order.RowVersion, ct);
+
+        logger.LogInformation("Order {OrderId} confirmed, {ItemsCount} items, status {Status}",
+            orderId, order.Lines.Count, OrderStatus.Confirmed);
     }
 
     public Task CancelAsync(long orderId, string? reason, CancellationToken ct = default) =>
@@ -150,10 +173,16 @@ public sealed class OrderService(IUnitOfWork uow, IMapper mapper) : IOrderServic
         if (!OrderStatus.IsKnown(input.Status))
             throw UnknownStatus(input.Status);
 
+        using var activity = ActivitySource.StartActivity("ChangeOrderStatus");
+        activity?.SetTag("order.id", orderId);
+        activity?.SetTag("order.status", input.Status);
+
         var rowVersion = input.RowVersion is null ? null : ServiceGuards.RowVersion(input.RowVersion);
 
         await uow.Orders.ChangeStatusAsync(orderId, input.Status, ServiceGuards.CurrentUser,
             input.Reason, rowVersion, ct);
+
+        logger.LogInformation("Order {OrderId} status changed to {Status}", orderId, input.Status);
     }
 
     public async Task DeleteAsync(long orderId, CancellationToken ct = default) =>

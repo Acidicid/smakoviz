@@ -1,7 +1,8 @@
 // =====================================================================
-// SmakoViz · .NET Aspire AppHost — вся система однією командою (SQL Server, MongoDB, delivery-api, menu-api, reviews-api).
+// SmakoViz · .NET Aspire AppHost — вся платформа однією командою:
+//   SQL Server + MongoDB → delivery-api, menu-api, reviews-api → aggregator → api-gateway (http://localhost:5000)
 //   dotnet run --project Platform.AppHost
-// Відкрий посилання на Dashboard з консолі: там SQL Server і delivery-api мають бути Running.
+// Порядок запуску задають ланцюжки WaitFor: БД → сервіси → Aggregator → Gateway.
 // =====================================================================
 
 var builder = DistributedApplication.CreateBuilder(args);
@@ -9,7 +10,11 @@ var builder = DistributedApplication.CreateBuilder(args);
 // SQL Server у контейнері + volume, щоб дані переживали перезапуск.
 // Ім'я бази-ресурсу "DeliveryDb" = ім'я рядка підключення в Delivery.Api (ConnectionStrings:DeliveryDb),
 // тому Aspire сам передасть його в API через змінну ConnectionStrings__DeliveryDb — код API не змінюється.
-var sql = builder.AddSqlServer("sql")
+// Пароль SQL Server — СЕКРЕТНИЙ параметр (Лаб. 05): не в коді, а в user secrets AppHost
+// ("Parameters:sql-password") або вводиться в Dashboard. У Dashboard значення приховане.
+var sqlPassword = builder.AddParameter("sql-password", secret: true);
+
+var sql = builder.AddSqlServer("sql", password: sqlPassword)
     .WithDataVolume("smakoviz-delivery-sql")
     .WithLifetime(ContainerLifetime.Persistent);   // контейнер не перестворюється при кожному запуску
 
@@ -21,7 +26,7 @@ var menuDb = sql.AddDatabase("MenuDb", databaseName: "SmakoViz_Menu");          
 //   var deliveryDb = builder.AddConnectionString("DeliveryDb");
 // і прописати рядок у appsettings.json цього проєкту: "ConnectionStrings": { "DeliveryDb": "..." }
 
-builder.AddProject<Projects.Delivery_Api>("delivery-api")
+var delivery = builder.AddProject<Projects.Delivery_Api>("delivery-api")
     .WithReference(deliveryDb)
     .WaitFor(deliveryDb)                              // API стартує, коли база готова
     .WithEnvironment("Database__Initialize", "true")  // застосувати schema/procedures/seed з Лаб. 01
@@ -29,7 +34,7 @@ builder.AddProject<Projects.Delivery_Api>("delivery-api")
 
 // Сервіс «Меню» (Лаб. 03): ім'я ресурсу "MenuDb" = ConnectionStrings:MenuDb у Menu.Api;
 // схему створюють міграції EF Core (MigrateAsync при старті), дані — HasData + DbInitializer.
-builder.AddProject<Projects.Menu_Api>("menu-api")
+var menu = builder.AddProject<Projects.Menu_Api>("menu-api")
     .WithReference(menuDb)
     .WaitFor(menuDb)
     .WithExternalHttpEndpoints();
@@ -43,9 +48,24 @@ var mongo = builder.AddMongoDB("mongo")
 
 var reviewsDb = mongo.AddDatabase("ReviewsDb", databaseName: "smakoviz_feedback");
 
-builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
+var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WithReference(reviewsDb)
     .WaitFor(reviewsDb)
+    .WithExternalHttpEndpoints();
+
+// ---------- Лаб. 05: Aggregator + API Gateway ----------
+// WithReference(сервіс) → service discovery: у коді Aggregator/Gateway адреса — це ім'я ресурсу
+// ("https+http://menu-api", "http://menu-api"), а реальний порт підставляє Aspire.
+var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
+    .WithReference(delivery).WithReference(menu).WithReference(reviews)
+    .WaitFor(delivery).WaitFor(menu).WaitFor(reviews);
+
+// Gateway — єдина точка входу з ФІКСОВАНИМ портом 5000; стартує останнім.
+builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
+    .WithHttpEndpoint(port: 5000, name: "public")
+    .WithReference(delivery).WithReference(menu).WithReference(reviews)
+    .WithReference(aggregator)
+    .WaitFor(aggregator)
     .WithExternalHttpEndpoints();
 
 builder.Build().Run();

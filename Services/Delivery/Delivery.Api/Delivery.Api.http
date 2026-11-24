@@ -2,16 +2,16 @@
 @api = http://localhost:5080
 
 ### Замовлення з Лаб. 01 (seed): SV-000001 = Id 1
-GET {{api}}/api/orders/1
+GET {{api}}/api/delivery/orders/1
 
 ### Неіснуючий Id → 404 ProblemDetails
-GET {{api}}/api/orders/999999
+GET {{api}}/api/delivery/orders/999999
 
 ### Пошук замовлень клієнта
-GET {{api}}/api/orders?customerId=1&page=1&pageSize=10
+GET {{api}}/api/delivery/orders?customerId=1&page=1&pageSize=10
 
 ### Оформити замовлення (транзакція) → 201 + Location
-POST {{api}}/api/orders
+POST {{api}}/api/delivery/orders
 Content-Type: application/json
 Idempotency-Key: demo-order-001
 
@@ -27,7 +27,7 @@ Idempotency-Key: demo-order-001
 }
 
 ### Транзакція з відкатом: 303 «Місо-суп» недоступний → 422, замовлення НЕ створюється
-POST {{api}}/api/orders
+POST {{api}}/api/delivery/orders
 Content-Type: application/json
 
 {
@@ -42,19 +42,19 @@ Content-Type: application/json
 }
 
 ### Підтвердити SV-000004 (Id 4) → 204
-POST {{api}}/api/orders/4/confirm
+POST {{api}}/api/delivery/orders/4/confirm
 
 ### Повторне підтвердження → 409 ProblemDetails
-POST {{api}}/api/orders/4/confirm
+POST {{api}}/api/delivery/orders/4/confirm
 
 ### Спецсимволи (O'Brien) — SQL-ін'єкції немає, параметри
-POST {{api}}/api/customers
+POST {{api}}/api/delivery/customers
 Content-Type: application/json
 
 { "email": "sean.obrien@example.com", "fullName": "Sean O'Brien", "phone": "+380991234567" }
 
 ### Невалідний вхід → 400 ValidationProblemDetails
-POST {{api}}/api/customers
+POST {{api}}/api/delivery/customers
 Content-Type: application/json
 
 { "email": "not-an-email", "fullName": "" }

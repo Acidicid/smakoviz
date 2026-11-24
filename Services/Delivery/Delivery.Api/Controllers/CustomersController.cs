@@ -10,7 +10,7 @@ namespace Delivery.Api.Controllers;
 /// повернути статус. Без SQL і без бізнес-правил; помилки → глобальний DomainExceptionHandler.
 /// </summary>
 [ApiController]
-[Route("api/customers")]
+[Route("api/delivery/customers")]
 [Produces("application/json")]
 public class CustomersController(ICustomerService customers) : ControllerBase
 {

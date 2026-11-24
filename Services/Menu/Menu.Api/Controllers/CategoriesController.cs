@@ -6,7 +6,7 @@ namespace Menu.Api.Controllers;
 
 /// <summary>Категорії (довідник) і вибірки страв через проміжну сутність M:N.</summary>
 [ApiController]
-[Route("api/categories")]
+[Route("api/menu/categories")]
 [Produces("application/json")]
 public class CategoriesController(ICategoryService categories) : ControllerBase
 {

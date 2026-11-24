@@ -6,7 +6,7 @@ namespace Delivery.Api.Controllers;
 
 /// <summary>Локальна копія страв із сервісу «Меню».</summary>
 [ApiController]
-[Route("api/dishes")]
+[Route("api/delivery/dishes")]
 [Produces("application/json")]
 public class DishesController(IDishService dishes) : ControllerBase
 {

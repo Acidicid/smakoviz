@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Extensions.DiagnosticSources;
 using Reviews.Domain.Entities;
 
 namespace Reviews.Infrastructure.Persistence;
@@ -28,7 +29,12 @@ public sealed class MongoDbContext
     public MongoDbContext(IOptions<MongoDbOptions> options)
     {
         var settings = options.Value;
-        Client = new MongoClient(settings.ConnectionString);
+        // Лаб. 05: драйвер публікує spans кожної команди (find, aggregate, insert…) у ActivitySource
+        // "MongoDB.Driver.Core.Extensions.DiagnosticSources" — ServiceDefaults підписує на нього OpenTelemetry.
+        var clientSettings = MongoClientSettings.FromConnectionString(settings.ConnectionString);
+        clientSettings.ClusterConfigurator = cb => cb.Subscribe(
+            new DiagnosticsActivityEventSubscriber(new InstrumentationOptions { CaptureCommandText = true }));
+        Client = new MongoClient(clientSettings);
         Database = Client.GetDatabase(settings.DatabaseName);
     }
 

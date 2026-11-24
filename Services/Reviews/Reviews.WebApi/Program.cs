@@ -6,13 +6,8 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---------- Serilog: структуровані логи (LoggingBehavior пише {RequestName}, {@Request}, {ElapsedMs}) ----------
-builder.Host.UseSerilog((ctx, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .Enrich.FromLogContext()
-    .Enrich.WithProperty("Service", "reviews-api")
-    .WriteTo.Console(outputTemplate:
-        "[{Timestamp:HH:mm:ss} {Level:u3}] {CorrelationId} {SourceContext}: {Message:lj}{NewLine}{Exception}"));
+// ---------- Лаб. 05: ServiceDefaults — Serilog, OpenTelemetry, health checks, service discovery ----------
+builder.AddServiceDefaults();
 
 // ---------- Шари Clean Architecture: кожен реєструє себе власним методом розширення ----------
 builder.Services
@@ -33,7 +28,7 @@ builder.Services.AddProblemDetails(options => options.CustomizeProblemDetails = 
     ctx.ProblemDetails.Extensions["traceId"] = ctx.HttpContext.TraceIdentifier);
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-// ---------- Health check MongoDB ----------
+// ---------- Health check MongoDB (входить у /health зі ServiceDefaults) ----------
 builder.Services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
 
 // ---------- Swagger ----------
@@ -48,7 +43,7 @@ builder.Services.AddSwaggerGen(options =>
 
 var app = builder.Build();
 
-app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseMiddleware<CorrelationIdMiddleware>();   // зі ServiceDefaults
 app.UseSerilogRequestLogging();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
@@ -60,7 +55,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
-app.MapHealthChecks("/health");
+app.MapDefaultEndpoints();   // /health (у т.ч. mongodb) і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 
 app.Run();

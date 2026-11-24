@@ -55,6 +55,7 @@ public static class MongoMappings
             BsonClassMap.RegisterClassMap<Review>(cm =>
             {
                 cm.AutoMap();                                         // властивості з private set
+                FixEntityMap(cm);
                 cm.MapField("_comments").SetElementName("comments");  // приватне поле → масив comments
                 cm.MapField("_photos").SetElementName("photos");
             });
@@ -62,10 +63,15 @@ public static class MongoMappings
             BsonClassMap.RegisterClassMap<Discussion>(cm =>
             {
                 cm.AutoMap();
+                FixEntityMap(cm);
                 cm.MapField("_recentMessages").SetElementName("recentMessages");
             });
 
-            BsonClassMap.RegisterClassMap<Message>(cm => cm.AutoMap());
+            BsonClassMap.RegisterClassMap<Message>(cm =>
+            {
+                cm.AutoMap();
+                FixEntityMap(cm);
+            });
 
             // ---- вкладений документ масиву comments: незмінний клас, створення через конструктор ----
             BsonClassMap.RegisterClassMap<Comment>(cm =>
@@ -73,6 +79,7 @@ public static class MongoMappings
                 cm.MapProperty(c => c.AuthorName);
                 cm.MapProperty(c => c.Text);
                 cm.MapProperty(c => c.CreatedAt);
+                CamelCase(cm);
                 cm.MapCreator(c => new Comment(c.AuthorName, c.Text, c.CreatedAt));
             });
 
@@ -81,6 +88,7 @@ public static class MongoMappings
             {
                 cm.MapProperty(a => a.CustomerId);
                 cm.MapProperty(a => a.DisplayName);
+                CamelCase(cm);
                 cm.MapCreator(a => new Author(a.CustomerId, a.DisplayName));
             });
 
@@ -89,6 +97,7 @@ public static class MongoMappings
                 cm.MapProperty(a => a.Food);
                 cm.MapProperty(a => a.Packaging);
                 cm.MapProperty(a => a.PortionSize);
+                CamelCase(cm);
                 cm.MapCreator(a => new RatingAspects(a.Food, a.Packaging, a.PortionSize));
             });
 
@@ -97,6 +106,7 @@ public static class MongoMappings
                 cm.MapProperty(a => a.CustomerId);
                 cm.MapProperty(a => a.DisplayName);
                 cm.MapProperty(a => a.Role);
+                CamelCase(cm);
                 cm.MapCreator(a => new MessageAuthor(a.CustomerId, a.DisplayName, a.Role));
             });
 
@@ -106,11 +116,53 @@ public static class MongoMappings
                 cm.MapProperty(p => p.AuthorName);
                 cm.MapProperty(p => p.Text);
                 cm.MapProperty(p => p.CreatedAt);
+                CamelCase(cm);
                 cm.MapCreator(p => new MessagePreview(p.MessageId, p.AuthorName, p.Text, p.CreatedAt));
             });
 
             _registered = true;
         }
+    }
+
+    /// <summary>
+    /// Нові версії MongoDB.Driver (3.14+) під час AutoMap() нащадка підхоплюють і УСПАДКОВАНІ властивості
+    /// (Id, CreatedAt…), які вже змаплені в BaseEntity, і get-only властивості (Photos, Comments) → помилка «element name '_id' is already being used».
+    /// Тому з карти нащадка прибираємо все, що оголошено не в ньому самому: ці поля серіалізує карта BaseEntity.
+    /// </summary>
+    private static void FixEntityMap(BsonClassMap cm)
+    {
+        foreach (var m in cm.DeclaredMemberMaps
+                     .Where(m => m.MemberInfo.DeclaringType != cm.ClassType
+                                 // а також обчислювані властивості без setter-а (Comments => _comments.AsReadOnly()):
+                                 // їх серіалізує приватне поле (_comments → "comments"), інакше ім'я елемента дублюється
+                                 || m.MemberInfo is System.Reflection.PropertyInfo { SetMethod: null })
+                     .ToList())
+            cm.UnmapMember(m.MemberInfo);
+
+        // Нові версії драйвера вважають сутність із private set «незмінною» і самі додають creator map
+        // з публічного конструктора (у Review — 12 параметрів, які не збігаються з полями) → помилка
+        // «Creator map ... has 12 arguments, but none are configured». Прибираємо автоматичні creator map-и
+        // і явно кажемо: створюй об'єкт приватним конструктором без параметрів, далі заповнюй поля.
+        var creatorMapsField = typeof(BsonClassMap)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .FirstOrDefault(f => f.FieldType == typeof(List<BsonCreatorMap>));
+        (creatorMapsField?.GetValue(cm) as List<BsonCreatorMap>)?.Clear();
+
+        var parameterless = cm.ClassType.GetConstructor(
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic,
+            Type.EmptyTypes);
+        if (parameterless is not null) cm.MapConstructor(parameterless);
+    }
+
+    /// <summary>
+    /// Карти, задані вручну (без AutoMap), не проходять конвенції — імена полів лишилися б PascalCase.
+    /// Робимо їх camelCase, як у документах Лаб. 01, і дозволяємо зайві поля.
+    /// </summary>
+    private static void CamelCase(BsonClassMap cm)
+    {
+        foreach (var m in cm.DeclaredMemberMaps)
+            m.SetElementName(char.ToLowerInvariant(m.MemberName[0]) + m.MemberName[1..]);
+        cm.SetIgnoreExtraElements(true);
     }
 
     /// <summary>Безпечний парсинг рядкового ObjectId (невалідні рядки відсікає валідатор ще раніше).</summary>

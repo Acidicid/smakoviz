@@ -8,7 +8,7 @@ using Reviews.Application.Queries.Discussions.GetDiscussionMessages;
 namespace Reviews.WebApi.Controllers;
 
 /// <summary>Обговорення біля ресторанів і відгуків (гібрид: прев'ю в discussions + історія в messages).</summary>
-[Route("api/discussions")]
+[Route("api/reviews/discussions")]
 public class DiscussionsController : ApiControllerBase
 {
     /// <summary>Обговорення з прев'ю останніх 3 повідомлень.</summary>

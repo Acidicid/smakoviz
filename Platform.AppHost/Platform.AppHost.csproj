@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- .NET Aspire AppHost: описує ВСІ ресурси платформи (SQL Server, MongoDB, Delivery, Menu, Reviews)
+  <!-- .NET Aspire AppHost: описує ВСІ ресурси платформи (SQL Server, MongoDB, Delivery, Menu, Reviews, Aggregator, Gateway)
        і запускає їх однією командою (dotnet run у цій папці або F5 у Visual Studio).
        Потрібен запущений Docker Desktop: SQL Server стартує в контейнері. -->
 
@@ -22,5 +22,9 @@
     <ProjectReference Include="..\Services\Delivery\Delivery.Api\Delivery.Api.csproj" />
     <ProjectReference Include="..\Services\Menu\Menu.Api\Menu.Api.csproj" />
     <ProjectReference Include="..\Services\Reviews\Reviews.WebApi\Reviews.WebApi.csproj" />
+    <!-- Лаб. 05. ServiceDefaults — не ресурс (не запускається), лише спільна бібліотека -->
+    <ProjectReference Include="..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\Platform.Aggregator\Platform.Aggregator.csproj" />
+    <ProjectReference Include="..\Platform.ApiGateway\Platform.ApiGateway.csproj" />
   </ItemGroup>
 </Project>

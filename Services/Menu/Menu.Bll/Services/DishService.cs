@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using AutoMapper;
 using FluentValidation;
 using Menu.Bll.Dtos;
@@ -6,6 +7,8 @@ using Menu.Bll.Validation;
 using Menu.Dal.Repositories;
 using Menu.Domain.Entities;
 using Menu.Domain.Exceptions;
+
+using Microsoft.Extensions.Logging;
 
 namespace Menu.Bll.Services;
 
@@ -19,8 +22,12 @@ public sealed class DishService(
     IMapper mapper,
     IValidator<DishQuery> queryValidator,
     IValidator<CreateDishDto> createValidator,
-    IValidator<ChangePriceDto> priceValidator) : IDishService
+    IValidator<ChangePriceDto> priceValidator,
+    ILogger<DishService> logger) : IDishService
 {
+    /// <summary>Власні spans бізнес-операцій (Лаб. 05), підключені в ServiceDefaults через AddSource("SmakoViz.*").</summary>
+    public static readonly ActivitySource ActivitySource = new("SmakoViz.Menu");
+
     public async Task<PagedResult<DishListItemDto>> GetListAsync(DishQuery query, CancellationToken ct = default)
     {
         await queryValidator.ValidateOrThrowAsync(query, ct);
@@ -67,14 +74,22 @@ public sealed class DishService(
 
     public async Task<DishDto> ChangePriceAsync(long id, ChangePriceDto input, CancellationToken ct = default)
     {
+        using var activity = ActivitySource.StartActivity("ChangeDishPrice");
+        activity?.SetTag("dish.id", id);
+
         await priceValidator.ValidateOrThrowAsync(input, ct);
 
         var dish = await LoadAsync(id, ct);
+        var oldPrice = dish.Price;
         if (input.RowVersion is not null)
             uow.Dishes.SetExpectedRowVersion(dish, Convert.FromBase64String(input.RowVersion));
 
         dish.ChangePrice(input.NewPrice);    // правило «ціна > 0 і змінилась» — у сутності
         await uow.SaveChangesAsync(ct);      // чужа зміна між GET і PUT → ConflictException (409)
+
+        activity?.SetTag("dish.new_price", dish.Price);
+        logger.LogInformation("Dish {DishId} of restaurant {RestaurantId} price changed {OldPrice} -> {NewPrice}",
+            dish.Id, dish.RestaurantId, oldPrice, dish.Price);
 
         // У Лаб. 08 тут публікуватиметься подія DishPriceChanged для копії в сервісі «Доставка»
         return mapper.Map<DishDto>(dish);

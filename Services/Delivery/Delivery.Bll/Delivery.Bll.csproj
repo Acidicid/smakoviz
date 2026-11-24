@@ -6,6 +6,8 @@
     <!-- AutoMapper 15+: Community-ліцензія (безкоштовно для навчання);
          ключ з automapper.io кладеться в AutoMapper:LicenseKey, без нього — лише попередження в лозі -->
     <PackageReference Include="AutoMapper" Version="15.*" />
+    <!-- ILogger<T> для бізнес-подій (Лаб. 05) -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.*" />
   </ItemGroup>
 
   <ItemGroup>

@@ -7,6 +7,7 @@
 | Лаб. 02 | Мікросервіс «Доставка»: DAL (ADO.NET + Dapper, Unit of Work) → BLL → Web API, запуск через .NET Aspire | [розділ 9](#9-лаб-02--мікросервіс-доставка-dal--bll--api--aspire) |
 | Лаб. 03 | Мікросервіс «Меню» на EF Core: Code-First, Fluent API, міграції, Eager/Explicit/M:N, специфікації, пагінація, FluentValidation, Serilog | [розділ 10](#10-лаб-03--мікросервіс-меню-на-ef-core) |
 | Лаб. 04 | Мікросервіс «Відгуки»: Clean Architecture (4 шари) + CQRS (MediatR) + MongoDB, Value Objects, pipeline behaviors | [розділ 11](#11-лаб-04--мікросервіс-відгуки-clean-architecture--cqrs--mongodb) |
+| Лаб. 05 | Платформа .NET Aspire: ServiceDefaults (Serilog + OpenTelemetry + CorrelationId), API Gateway (YARP), Aggregator (Task.WhenAll, часткові відмови) | [розділ 12](#12-лаб-05--платформа-net-aspire-gateway-aggregator-observability) |
 
 ## 1. Предметна область
 
@@ -190,7 +191,11 @@ erDiagram
 ```
 Platform.slnx        одне рішення на всю платформу                            (Лаб. 02+)
 Directory.Build.props  спільні налаштування проєктів (.NET 9)
-Platform.AppHost/    .NET Aspire — запуск API + SQL Server однією командою    (Лаб. 02)
+Platform.AppHost/    .NET Aspire — запуск усієї платформи однією командою     (Лаб. 02, 05)
+Platform.ServiceDefaults/  Extensions.cs: Serilog, OpenTelemetry, health, service discovery,
+                     resilience, CorrelationIdMiddleware + CorrelationIdHandler   (Лаб. 05)
+Platform.ApiGateway/ YARP: маршрути (appsettings.json), логування, JWT, Dockerfile (Лаб. 05)
+Platform.Aggregator/ typed HttpClients, AggregationService (Task.WhenAll + Warnings)  (Лаб. 05)
 Services/
   Delivery/          мікросервіс «Доставка» = Проєкт №1 (ADO.NET + Dapper)     (Лаб. 02)
     Delivery.Api/      контролери, Program.cs, appsettings.json, Swagger, Serilog
@@ -376,7 +381,7 @@ AutoMapper з профілем `DeliveryProfile`, логування — **Seril
 
 ### 9.5. Транзакційна операція: оформлення замовлення
 
-`POST /api/orders` → `OrderService.PlaceOrderAsync` — **одна транзакція на три репозиторії**:
+`POST /api/delivery/orders` → `OrderService.PlaceOrderAsync` — **одна транзакція на три репозиторії**:
 
 ```
 BEGIN TRAN (READ COMMITTED)
@@ -391,7 +396,7 @@ COMMIT   — або ROLLBACK, якщо будь-який крок впав
 
 **Перевірка відкату:** замов страву `303` («Місо-суп», у seed `IsAvailable = 0`) разом із `301`.
 Позиція 301 і саме замовлення вже записані, але `usp_Order_AddLine` для 303 кидає `THROW 50004` →
-`BusinessRuleException` → **422**, і `ROLLBACK` прибирає все: у `GET /api/orders` нового замовлення немає.
+`BusinessRuleException` → **422**, і `ROLLBACK` прибирає все: у `GET /api/delivery/orders` нового замовлення немає.
 
 Як Unit of Work тримає все в одній транзакції: репозиторії створюються всередині `UnitOfWork` і отримують
 **те саме** `SqlConnection` та функцію `() => _transaction`, тому кожна команда автоматично йде в поточну транзакцію.
@@ -421,22 +426,22 @@ SERIALIZABLE прибрав би більше аномалій читання, �
 
 | Метод | Шлях | Успіх | Помилки |
 |-------|------|-------|---------|
-| GET | `/api/customers?q=&page=&pageSize=` | 200 | 400 |
-| GET | `/api/customers/{id}` | 200 | 404 |
-| POST | `/api/customers` | 201 + Location | 400, 409 |
-| PUT | `/api/customers/{id}` (з `rowVersion`) | 200 | 400, 404, 409 |
-| DELETE | `/api/customers/{id}` | 204 | 404 |
-| GET | `/api/dishes?restaurantId=&onlyAvailable=` | 200 | 400 |
-| GET | `/api/dishes/{id}` | 200 | 404 |
-| PUT | `/api/dishes/{id}` (синхронізація копії з Меню) | 200 | 400 |
-| GET | `/api/orders?customerId=&status=&page=&pageSize=` | 200 | 400 |
-| GET | `/api/orders/{id}` | 200 | 404 |
-| POST | `/api/orders` (заголовок `Idempotency-Key` — необов'язковий) | 201 + Location / 200 для повтору | 400, 422 |
-| POST | `/api/orders/{id}/lines` | 200 | 400, 404, 422 |
-| POST | `/api/orders/{id}/confirm` | 204 | 404, 409, 422 |
-| POST | `/api/orders/{id}/cancel` | 204 | 404, 409 |
-| POST | `/api/orders/{id}/status` | 204 | 400, 404, 409 |
-| DELETE | `/api/orders/{id}` (лише Delivered/Cancelled) | 204 | 404, 422 |
+| GET | `/api/delivery/customers?q=&page=&pageSize=` | 200 | 400 |
+| GET | `/api/delivery/customers/{id}` | 200 | 404 |
+| POST | `/api/delivery/customers` | 201 + Location | 400, 409 |
+| PUT | `/api/delivery/customers/{id}` (з `rowVersion`) | 200 | 400, 404, 409 |
+| DELETE | `/api/delivery/customers/{id}` | 204 | 404 |
+| GET | `/api/delivery/dishes?restaurantId=&onlyAvailable=` | 200 | 400 |
+| GET | `/api/delivery/dishes/{id}` | 200 | 404 |
+| PUT | `/api/delivery/dishes/{id}` (синхронізація копії з Меню) | 200 | 400 |
+| GET | `/api/delivery/orders?customerId=&status=&page=&pageSize=` | 200 | 400 |
+| GET | `/api/delivery/orders/{id}` | 200 | 404 |
+| POST | `/api/delivery/orders` (заголовок `Idempotency-Key` — необов'язковий) | 201 + Location / 200 для повтору | 400, 422 |
+| POST | `/api/delivery/orders/{id}/lines` | 200 | 400, 404, 422 |
+| POST | `/api/delivery/orders/{id}/confirm` | 204 | 404, 409, 422 |
+| POST | `/api/delivery/orders/{id}/cancel` | 204 | 404, 409 |
+| POST | `/api/delivery/orders/{id}/status` | 204 | 400, 404, 409 |
+| DELETE | `/api/delivery/orders/{id}` (лише Delivered/Cancelled) | 204 | 404, 422 |
 
 Повний опис DTO і статусів — у **Swagger** (`/swagger`). Готові запити — у `Services/Delivery/Delivery.Api/Delivery.Api.http`.
 
@@ -448,34 +453,34 @@ SERIALIZABLE прибрав би більше аномалій читання, �
 API=http://localhost:5080
 
 # 200 — замовлення з seed Лаб. 01 (SV-000001) з позиціями та історією статусів
-curl $API/api/orders/1
+curl $API/api/delivery/orders/1
 
 # 404 ProblemDetails, а не 500
-curl -i $API/api/orders/999999
+curl -i $API/api/delivery/orders/999999
 
 # 201 + Location — оформлення замовлення (транзакція)
-curl -i -X POST $API/api/orders -H "Content-Type: application/json" -H "Idempotency-Key: demo-001" \
+curl -i -X POST $API/api/delivery/orders -H "Content-Type: application/json" -H "Idempotency-Key: demo-001" \
   -d '{"customerId":2,"restaurantName":"Буковинська хата","address":"м. Чернівці, вул. Руська, 5","contactPhone":"+380672223344","items":[{"dishId":101,"quantity":1},{"dishId":102,"quantity":2}]}'
 
 # той самий Idempotency-Key ще раз → 200 і те саме замовлення (друге не створюється)
 
 # 422 + ВІДКАТ — страва 303 недоступна; замовлення не з'являється
-curl -i -X POST $API/api/orders -H "Content-Type: application/json" \
+curl -i -X POST $API/api/delivery/orders -H "Content-Type: application/json" \
   -d '{"customerId":3,"restaurantName":"Суші Дзен","address":"м. Чернівці, просп. Незалежності, 101","contactPhone":"+380935554466","items":[{"dishId":301,"quantity":1},{"dishId":303,"quantity":1}]}'
 
 # 204, потім 409 — підтвердження SV-000004 і повторне підтвердження
-curl -i -X POST $API/api/orders/4/confirm
-curl -i -X POST $API/api/orders/4/confirm
+curl -i -X POST $API/api/delivery/orders/4/confirm
+curl -i -X POST $API/api/delivery/orders/4/confirm
 
 # 409 — недопустимий перехід: доставлене замовлення не можна знову відправити кур'єром
-curl -i -X POST $API/api/orders/1/status -H "Content-Type: application/json" -d '{"status":"OnTheWay"}'
+curl -i -X POST $API/api/delivery/orders/1/status -H "Content-Type: application/json" -d '{"status":"OnTheWay"}'
 
 # 201 — ім'я з апострофом: параметри, а не конкатенація, тож SQL не ламається
-curl -i -X POST $API/api/customers -H "Content-Type: application/json" \
+curl -i -X POST $API/api/delivery/customers -H "Content-Type: application/json" \
   -d '{"email":"sean.obrien@example.com","fullName":"Sean O'"'"'Brien","phone":"+380991234567"}'
 
 # 400 ValidationProblemDetails — невалідний email і порожнє ім'я
-curl -i -X POST $API/api/customers -H "Content-Type: application/json" -d '{"email":"bad","fullName":""}'
+curl -i -X POST $API/api/delivery/customers -H "Content-Type: application/json" -d '{"email":"bad","fullName":""}'
 ```
 
 ### 9.9. Безпека запитів і з'єднань
@@ -575,7 +580,7 @@ erDiagram
 
 ### 10.4. Пагінація, фільтрація, сортування (у SQL)
 
-`GET /api/dishes?search=Піца&minPrice=100&maxPrice=300&categoryId=3&onlyAvailable=true&sortBy=price&sortDir=desc&page=1&pageSize=5`
+`GET /api/menu/dishes?search=Піца&minPrice=100&maxPrice=300&categoryId=3&onlyAvailable=true&sortBy=price&sortDir=desc&page=1&pageSize=5`
 
 - `page` — з 1; `pageSize` — за замовчуванням 20, максимум 100 (більше обрізається);
 - фільтри: `search`, `restaurantId`, `categoryId` (через M:N), `minPrice`, `maxPrice`, `onlyAvailable`;
@@ -593,7 +598,7 @@ erDiagram
 }
 ```
 
-Ресторани: `GET /api/restaurants?city=Чернівці&cuisineType=Італійська&sortBy=name&page=1&pageSize=10`
+Ресторани: `GET /api/menu/restaurants?city=Чернівці&cuisineType=Італійська&sortBy=name&page=1&pageSize=10`
 (друга специфікація `RestaurantsFilterSpec` працює через той самий `ListAsync(spec)` без змін у репозиторії).
 
 ### 10.5. Валідація, помилки, логування
@@ -617,32 +622,32 @@ erDiagram
 ```bash
 API=http://localhost:5090          # або адреса menu-api з Aspire Dashboard
 
-curl "$API/api/dishes?page=2&pageSize=5"                         # totalCount = 10 (усі), на сторінці 5
-curl "$API/api/dishes?search=Піца&sortBy=price&sortDir=desc"      # фільтр + сортування в SQL
-curl "$API/api/dishes?sortBy=password"                           # 400: недозволене поле сортування
-curl "$API/api/dishes/101"                                       # Eager: у лозі API один SELECT
-curl "$API/api/restaurants/1"                                    # Explicit: у лозі три SELECT
-curl -i "$API/api/dishes/999999"                                 # 404 ProblemDetails
+curl "$API/api/menu/dishes?page=2&pageSize=5"                         # totalCount = 10 (усі), на сторінці 5
+curl "$API/api/menu/dishes?search=Піца&sortBy=price&sortDir=desc"      # фільтр + сортування в SQL
+curl "$API/api/menu/dishes?sortBy=password"                           # 400: недозволене поле сортування
+curl "$API/api/menu/dishes/101"                                       # Eager: у лозі API один SELECT
+curl "$API/api/menu/restaurants/1"                                    # Explicit: у лозі три SELECT
+curl -i "$API/api/menu/dishes/999999"                                 # 404 ProblemDetails
 
 # 201 + Location, потім те саме ще раз → 409 (назва в ресторані вже зайнята)
-curl -i -X POST "$API/api/dishes" -H "Content-Type: application/json" \
+curl -i -X POST "$API/api/menu/dishes" -H "Content-Type: application/json" \
   -d '{"restaurantId":1,"name":"Деруни зі сметаною","price":135.5,"initialPortions":25,"categoryIds":[2,6]}'
 
 # 400 з помилками по полях (порожня назва, від'ємна ціна)
-curl -i -X POST "$API/api/dishes" -H "Content-Type: application/json" -d '{"restaurantId":1,"name":"","price":-5}'
+curl -i -X POST "$API/api/menu/dishes" -H "Content-Type: application/json" -d '{"restaurantId":1,"name":"","price":-5}'
 
 # 409 — правило сутності: списати порцій більше, ніж є
-curl -i -X POST "$API/api/dishes/101/portions/remove" -H "Content-Type: application/json" -d '{"quantity":999}'
+curl -i -X POST "$API/api/menu/dishes/101/portions/remove" -H "Content-Type: application/json" -d '{"quantity":999}'
 
 # 409 — ресторан зі стравами видаляти не можна
-curl -i -X DELETE "$API/api/restaurants/1"
+curl -i -X DELETE "$API/api/menu/restaurants/1"
 
 # M:N через проміжну сутність: нові «Хіти продажу» (AddedAt) і рекомендовані піци (IsFeatured)
-curl "$API/api/categories/bestseller/recent?days=120"
-curl "$API/api/categories/3/featured"
+curl "$API/api/menu/categories/bestseller/recent?days=120"
+curl "$API/api/menu/categories/3/featured"
 
 # профіль ресторану: час — у форматі "HH:mm:ss"
-curl -i -X PUT "$API/api/restaurants/3/profile" -H "Content-Type: application/json" \
+curl -i -X PUT "$API/api/menu/restaurants/3/profile" -H "Content-Type: application/json" \
   -d '{"address":"просп. Незалежності, 52","phone":"+380372555003","opensAt":"11:00:00","closesAt":"23:30:00","minOrderAmount":300}'
 ```
 
@@ -796,3 +801,119 @@ db.reviews.getIndexes()         // ix_reviews_*, ux_reviews_author_target, ux_re
 | Swagger | Документ у Compass | `db.reviews.getIndexes()` |
 |---------|--------------------|---------------------------|
 | ![](docs/screenshots/lab04-swagger.png) | ![](docs/screenshots/lab04-compass.png) | ![](docs/screenshots/lab04-indexes.png) |
+
+## 12. Лаб. 05 — платформа .NET Aspire: Gateway, Aggregator, observability
+
+### 12.1 Архітектура
+
+```
+                 клієнт (curl / браузер / .http)
+                            │  http://localhost:5000
+                            ▼
+                 ┌─────────────────────┐   X-Correlation-Id генерується тут
+                 │ api-gateway (YARP)  │   логування: маршрут, статус, тривалість
+                 └──┬──────┬──────┬────┴──────────────┐
+   /api/delivery/** │      │/api/menu/**   /api/reviews/**   /api/aggregator/** (Order = 1)
+                    ▼      ▼      ▼                    ▼
+           delivery-api  menu-api  reviews-api ◄── aggregator (Task.WhenAll)
+                │           │          │
+           SQL Server (DeliveryDb, MenuDb)   MongoDB (ReviewsDb)
+```
+
+| Ресурс Aspire | Проєкт | Що робить |
+|---|---|---|
+| `sql` + `DeliveryDb`, `MenuDb` | контейнер SQL Server, volume `smakoviz-delivery-sql`, пароль — секретний параметр `sql-password` | бази Лаб. 02 і 03 |
+| `mongo` + `ReviewsDb` | контейнер MongoDB, volume `smakoviz-reviews-mongo` | база Лаб. 04 |
+| `delivery-api` / `menu-api` / `reviews-api` | `Services/*` | мікросервіси (змінено лише `Program.cs` + префікс маршрутів `/api/{domain}`) |
+| `aggregator` | `Platform.Aggregator` | композиція даних трьох сервісів |
+| `api-gateway` | `Platform.ApiGateway` | єдина точка входу, **порт 5000** (`WithHttpEndpoint(port: 5000, name: "public")`) |
+
+Порядок запуску (ланцюжки `WaitFor`): **бази → сервіси → aggregator → api-gateway**.
+Посилання між проєктами: AppHost → усі проєкти; сервіси, Gateway і Aggregator → **лише** `Platform.ServiceDefaults`; на AppHost не посилається ніхто.
+
+### 12.2 Запуск
+
+1. Запусти **Docker Desktop**.
+2. Перший запуск (один раз) — пароль SQL Server у секретах AppHost. Якщо після Лаб. 02–04 Aspire вже згенерував пароль,
+   він лежить у тих самих секретах під ключем `Parameters:sql-password` і нічого робити не треба. Інакше:
+   ```bash
+   dotnet user-secrets set "Parameters:sql-password" "SmakoViz_Dev_2026!" --project Platform.AppHost
+   ```
+   (або Aspire Dashboard сам попросить ввести значення — поле приховане, бо `secret: true`).
+3. Запуск усієї платформи:
+   ```bash
+   dotnet run --project Platform.AppHost
+   ```
+4. Відкрий посилання на Dashboard з консолі → вкладка **Resources**: `sql`, `mongo`, `delivery-api`, `menu-api`,
+   `reviews-api`, `aggregator`, `api-gateway` — усі **Running**.
+
+**Адреса Gateway: `http://localhost:5000`** — усі запити клієнта йдуть тільки через неї.
+
+### 12.3 Запити через Gateway
+
+```bash
+GW=http://localhost:5000
+
+curl -i $GW/api/delivery/orders/1                 # → delivery-api; у відповіді заголовок X-Correlation-Id
+curl -i $GW/api/menu/dishes?page=1&pageSize=5     # → menu-api
+curl -i $GW/api/menu/restaurants/1                # → menu-api
+curl -i $GW/api/reviews?restaurantId=1            # → reviews-api
+curl -i $GW/api/reviews/restaurants/1/rating      # → reviews-api (aggregation pipeline MongoDB)
+
+# власний CorrelationId зберігається Gateway і проходить через усі сервіси
+curl -i $GW/api/delivery/orders/1 -H "X-Correlation-Id: demo-12345"
+
+# запис через Gateway
+curl -i -X POST $GW/api/delivery/orders/4/confirm
+curl -i -X POST $GW/api/reviews -H "Content-Type: application/json" -d '{"targetType":"restaurant","restaurantId":2,"restaurantName":"Pizza Pronto","customerId":3,"authorName":"Ірина Б.","rating":5,"text":"Через Gateway!"}'
+```
+
+### 12.4 Aggregator
+
+```bash
+# повна картка замовлення: замовлення (delivery-api) → паралельно ресторан з актуальними цінами (menu-api),
+# рейтинг ресторану і відгуки цього клієнта (reviews-api)
+curl -i $GW/api/aggregator/orders/1/full
+
+# картка ресторану: меню + рейтинг + 3 останні відгуки (усі три виклики паралельно)
+curl -i $GW/api/aggregator/restaurants/1
+```
+
+Приклад відповіді (camelCase, `null`-поля не серіалізуються):
+
+```json
+{
+  "order": { "id": 1, "orderNumber": "SV-000001", "customerId": 1, "status": "Delivered", "totalAmount": 425.00, "...": "..." },
+  "restaurant": { "id": 1, "name": "Буковинська хата", "city": "Чернівці", "averageRating": 4.75, "reviewsCount": 4 },
+  "items": [ { "dishId": 101, "dishName": "Бануш з бринзою і шкварками", "quantity": 1, "priceInOrder": 185.00, "currentPrice": 185.00, "availableNow": true, "dishRating": 5 } ],
+  "reviews": [ { "id": "…", "targetType": "dish", "dishName": "Бануш з бринзою і шкварками", "rating": 5 } ],
+  "warnings": []
+}
+```
+
+**Часткова відмова:** у Dashboard зупини `reviews-api` (кнопка Stop) і повтори `curl $GW/api/aggregator/orders/1/full` —
+відповідь **200** із замовленням і стравами, а в `warnings`: `"reviews-api is unavailable: …"` (не 500).
+Запусти сервіс знову — відповідь знову повна. Без `delivery-api` замовлення взяти нізвідки → **503** ProblemDetails.
+
+### 12.5 Що де реалізовано
+
+| Вимога | Де |
+|---|---|
+| Serilog: ServiceName, Environment, MachineName, ThreadId, LogContext, `CompactJsonFormatter`, `writeToProviders: true`, рівні за середовищем | `Platform.ServiceDefaults/Extensions.cs` → `ConfigureSerilog` |
+| OpenTelemetry: AspNetCore, HttpClient, SqlClient, MongoDB (`AddSource("MongoDB.Driver.Core.Extensions.DiagnosticSources")`), власні `SmakoViz.*`, `UseOtlpExporter` за `OTEL_EXPORTER_OTLP_ENDPOINT`, sampling 100 % у Development | `Extensions.cs` → `ConfigureOpenTelemetry` |
+| Трасування команд MongoDB | `Reviews.Infrastructure/Persistence/MongoDbContext.cs` (`DiagnosticsActivityEventSubscriber`) |
+| CorrelationId: middleware (з заголовка або новий GUID → LogContext → відповідь, boundary logging) + `CorrelationIdHandler` для вихідних запитів | `Extensions.cs` → `CorrelationIdMiddleware`, `CorrelationIdHandler` |
+| Бізнес-логи + `ActivitySource` | `OrderService` (PlaceOrder, ChangeOrderStatus), Menu `DishService.ChangePriceAsync`, `CreateReviewCommandHandler`, `AggregationService` |
+| YARP: catch-all маршрути, кластери `http://<resource>`, `AddServiceDiscoveryDestinationResolver()`, маршрут aggregator з `Order: 1`, таймаути, метадані | `Platform.ApiGateway/appsettings.json`, `Program.cs` |
+| Логування Gateway: метод, шлях, IP, маршрут, кластер, статус, тривалість, розмір; помилки недоступних сервісів | `Platform.ApiGateway/Program.cs` |
+| Typed HttpClients (`https+http://…`), `Task.WhenAll`, `CancellationToken` скрізь, `Warnings`, лог тривалості кожного виклику | `Platform.Aggregator/Clients`, `Services/AggregationService.cs` |
+
+### 12.6 Перевірка в Dashboard (для звіту)
+
+1. **Resources** — усі ресурси Running; `/health` кожного сервісу → `Healthy`.
+2. **Traces** — знайди `GET /api/aggregator/orders/{id}/full`: ієрархія `api-gateway → aggregator → delivery-api → SQL`,
+   далі **паралельно** `menu-api → SQL` і `reviews-api → MongoDB` (смуги spans перекриваються в часі).
+3. **Structured logs** — фільтр `CorrelationId = demo-12345` (або значення із заголовка відповіді) показує записи
+   **всіх** сервісів ланцюжка з полями ServiceName, Environment, MachineName, ThreadId, TraceId, SpanId.
+4. Порівняй виклик напряму (`delivery-api` за його адресою з Dashboard) і через Gateway: Gateway додає CorrelationId
+   і пише рядок `Gateway GET /api/delivery/orders/1 -> route delivery, cluster delivery …`.

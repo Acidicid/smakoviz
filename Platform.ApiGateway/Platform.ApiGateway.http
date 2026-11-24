@@ -1,0 +1,21 @@
+# Усі запити — через Gateway (порт 5000). Запусти: dotnet run --project Platform.AppHost
+@GW = http://localhost:5000
+
+### delivery-api (CorrelationId передаємо свій — він збережеться в усіх сервісах)
+GET {{GW}}/api/delivery/orders/1
+X-Correlation-Id: demo-12345
+
+### menu-api
+GET {{GW}}/api/menu/restaurants/1
+
+### reviews-api
+GET {{GW}}/api/reviews?restaurantId=1&page=1&pageSize=5
+
+### aggregator — повна картка замовлення
+GET {{GW}}/api/aggregator/orders/1/full
+
+### aggregator — картка ресторану
+GET {{GW}}/api/aggregator/restaurants/1
+
+### health шлюзу
+GET {{GW}}/health

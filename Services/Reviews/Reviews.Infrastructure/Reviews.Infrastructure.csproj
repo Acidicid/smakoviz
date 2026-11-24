@@ -5,6 +5,8 @@
   <ItemGroup>
     <PackageReference Include="MongoDB.Driver" Version="3.*" />
     <PackageReference Include="MongoDB.Bson" Version="3.*" />
+    <!-- трасування команд MongoDB в OpenTelemetry (Лаб. 05) -->
+    <PackageReference Include="MongoDB.Driver.Core.Extensions.DiagnosticSources" Version="2.*" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.*" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.*" />
   </ItemGroup>

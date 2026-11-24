@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Спільні налаштування для ВСІХ сервісів платформи (Лаб. 05):
+       Serilog, CorrelationId, OpenTelemetry (traces/metrics/logs → Aspire Dashboard),
+       health checks, service discovery, resilience для HttpClient.
+       Сервіси, Gateway та Aggregator посилаються лише на цей проєкт; на AppHost не посилається ніхто. -->
+
+  <PropertyGroup>
+    <IsAspireSharedProject>true</IsAspireSharedProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+
+    <!-- resilience (retry, timeout, circuit breaker) + service discovery (http://menu-api → реальна адреса) -->
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="9.*" />
+    <PackageReference Include="Microsoft.Extensions.ServiceDiscovery" Version="9.*" />
+
+    <!-- OpenTelemetry: версії ЗАКРІПЛЕНІ на 1.12 — новіші (1.14+) тягнуть бібліотеки .NET 10/11 і ламають запуск на net9.0 -->
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.12.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.12.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.12.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.12.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" Version="1.12.0" />
+    <!-- SqlClient покриває і Dapper (Доставка), і EF Core (Меню); пакет поки що prerelease -->
+    <PackageReference Include="OpenTelemetry.Instrumentation.SqlClient" Version="1.12.0-beta.1" />
+
+    <!-- Serilog: CompactJsonFormatter (входить у Serilog.AspNetCore) + enrichers -->
+    <PackageReference Include="Serilog.AspNetCore" Version="9.*" />
+    <PackageReference Include="Serilog.Enrichers.Environment" Version="3.*" />
+    <PackageReference Include="Serilog.Enrichers.Thread" Version="4.*" />
+  </ItemGroup>
+</Project>

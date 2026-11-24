@@ -7,7 +7,7 @@ namespace Delivery.Api.Controllers;
 
 /// <summary>Замовлення доставки: оформлення, позиції, життєвий цикл статусів.</summary>
 [ApiController]
-[Route("api/orders")]
+[Route("api/delivery/orders")]
 [Produces("application/json")]
 public class OrdersController(IOrderService orders) : ControllerBase
 {

@@ -1,0 +1,16 @@
+# Напряму (в обхід Gateway). Через Gateway — http://localhost:5000/api/aggregator/...
+@Aggregator = http://localhost:5110
+@Gateway = http://localhost:5000
+
+### Повна картка замовлення SV-000001 (delivery + menu + reviews паралельно)
+GET {{Gateway}}/api/aggregator/orders/1/full
+X-Correlation-Id: demo-aggregator-001
+
+### Картка ресторану: меню + рейтинг + 3 останні відгуки
+GET {{Gateway}}/api/aggregator/restaurants/1
+
+### 404 — замовлення немає
+GET {{Gateway}}/api/aggregator/orders/999999/full
+
+### Напряму в Aggregator
+GET {{Aggregator}}/api/aggregator/restaurants/2

@@ -8,6 +8,8 @@
     <!-- AddValidatorsFromAssemblyContaining (замість застарілого AddFluentValidation) -->
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="12.*" />
     <PackageReference Include="Ardalis.Specification" Version="9.*" />
+    <!-- ILogger<T> для бізнес-подій (Лаб. 05) -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.*" />
   </ItemGroup>
 
   <ItemGroup>

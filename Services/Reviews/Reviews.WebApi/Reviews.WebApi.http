@@ -62,13 +62,13 @@ Content-Type: application/json
 { "authorName": "Pizza Pronto", "text": "Дякуємо за відгук!" }
 
 ### Обговорення: відкрити → 201
-POST {{api}}/api/discussions
+POST {{api}}/api/reviews/discussions
 Content-Type: application/json
 
 { "restaurantId": 2, "restaurantName": "Pizza Pronto", "title": "Чи є безглютенове тісто?" }
 
 ### Повідомлення в обговорення → 201
-POST {{api}}/api/discussions/REPLACE_WITH_DISCUSSION_ID/messages
+POST {{api}}/api/reviews/discussions/REPLACE_WITH_DISCUSSION_ID/messages
 Content-Type: application/json
 
 { "customerId": 1, "authorName": "Олена К.", "role": "customer", "text": "Цікавить і для дітей" }

@@ -1,6 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Grpc.Health.V1;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Platform.Aggregator.Clients;
+using Platform.Aggregator.HealthChecks;
+using Platform.Aggregator.Resilience;
 using Platform.Aggregator.Services;
 using DeliveryGrpc = Delivery.Grpc;
 using MenuGrpc = Menu.Grpc;
@@ -18,14 +22,39 @@ builder.AddServiceDefaults();   // Serilog, OpenTelemetry, service discovery, re
 // ---------- Лаб. 06: типізовані gRPC-клієнти (згенеровані з .proto) з адресою за логічним іменем ----------
 // Створюються через ту саму фабрику HttpClient, тож ServiceDefaults діє і тут: service discovery
 // ("https://menu-api" → реальна адреса), resilience і CorrelationIdHandler (X-Correlation-Id → метадані gRPC).
-builder.Services.AddGrpcClient<DeliveryGrpc.DeliveryService.DeliveryServiceClient>(o => o.Address = new Uri("https://delivery-api"));
-builder.Services.AddGrpcClient<MenuGrpc.MenuService.MenuServiceClient>(o => o.Address = new Uri("https://menu-api"));
-builder.Services.AddGrpcClient<ReviewsGrpc.ReviewsService.ReviewsServiceClient>(o => o.Address = new Uri("https://reviews-api"));
+// Лаб. 07: retry за gRPC-статусами (ServiceConfig) + власні circuit breaker/таймаут замість стандартного обробника
+// (RemoveAllResilienceHandlers → без нашарування). Профілі й обґрунтування — Resilience/ResiliencePolicies.cs.
+builder.Services.AddGrpcClient<DeliveryGrpc.DeliveryService.DeliveryServiceClient>(o => o.Address = new Uri("https://delivery-api"))
+    .AddProfiledGrpcResilience("delivery-api", ResilienceProfile.Critical);
+builder.Services.AddGrpcClient<MenuGrpc.MenuService.MenuServiceClient>(o => o.Address = new Uri("https://menu-api"))
+    .AddProfiledGrpcResilience("menu-api", ResilienceProfile.Critical);
+builder.Services.AddGrpcClient<ReviewsGrpc.ReviewsService.ReviewsServiceClient>(o => o.Address = new Uri("https://reviews-api"))
+    .AddProfiledGrpcResilience("reviews-api", ResilienceProfile.NonCritical);
 
 // ---------- Лаб. 05: typed HttpClients (для порівняння HTTP vs gRPC) ----------
-builder.Services.AddHttpClient<DeliveryClient>(c => c.BaseAddress = new("https+http://delivery-api"));
-builder.Services.AddHttpClient<MenuClient>(c => c.BaseAddress = new("https+http://menu-api"));
-builder.Services.AddHttpClient<ReviewsClient>(c => c.BaseAddress = new("https+http://reviews-api"));
+// Лаб. 07: критичні — більше повторів і чутливіший breaker; некритичні — швидко здатися (часткова відповідь)
+builder.Services.AddHttpClient<DeliveryClient>(c => c.BaseAddress = new("https+http://delivery-api"))
+    .AddProfiledResilience("delivery-api", ResilienceProfile.Critical);
+builder.Services.AddHttpClient<MenuClient>(c => c.BaseAddress = new("https+http://menu-api"))
+    .AddProfiledResilience("menu-api", ResilienceProfile.Critical);
+builder.Services.AddHttpClient<ReviewsClient>(c => c.BaseAddress = new("https+http://reviews-api"))
+    .AddProfiledResilience("reviews-api", ResilienceProfile.NonCritical);
+
+// ---------- Лаб. 07: health checks gRPC-залежностей (grpc.health.v1) ----------
+// Іменовані Health.HealthClient без resilience — перевірка має швидко сказати «так/ні», а не повторювати.
+foreach (var service in new[] { "delivery-api", "menu-api", "reviews-api" })
+    builder.Services.AddGrpcClient<Health.HealthClient>(service, o => o.Address = new Uri($"https://{service}"))
+        .RemoveAllResilienceHandlers();
+
+builder.Services.AddHealthChecks()
+    // критичний: без замовлень Aggregator не працює → Unhealthy
+    .AddTypeActivatedCheck<GrpcDependencyHealthCheck>("delivery-api", HealthStatus.Unhealthy,
+        ["grpc", "downstream", "ready"], TimeSpan.FromSeconds(3), "delivery-api")
+    // menu / reviews: Aggregator повертає часткову відповідь → Degraded
+    .AddTypeActivatedCheck<GrpcDependencyHealthCheck>("menu-api", HealthStatus.Degraded,
+        ["grpc", "downstream", "ready"], TimeSpan.FromSeconds(3), "menu-api")
+    .AddTypeActivatedCheck<GrpcDependencyHealthCheck>("reviews-api", HealthStatus.Degraded,
+        ["grpc", "downstream", "ready"], TimeSpan.FromSeconds(3), "reviews-api");
 
 builder.Services.AddScoped<GrpcPlatformClient>();
 builder.Services.AddScoped<HttpPlatformClient>();
@@ -34,7 +63,11 @@ builder.Services.AddSingleton<AggregatorMetrics>();
 
 // ---------- Лаб. 06: Redis — кеш агрегованих відповідей (TTL 30–60 с) ----------
 if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
-    builder.AddRedisDistributedCache("redis");
+{
+    builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true);
+    builder.Services.AddHealthChecks().AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded,
+        ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));   // кеш необов'язковий → Degraded
+}
 else
     builder.Services.AddDistributedMemoryCache();
 

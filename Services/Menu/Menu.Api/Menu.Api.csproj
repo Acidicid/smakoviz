@@ -11,6 +11,8 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
     <!-- Лаб. 06: gRPC-сервер (містить Google.Protobuf і Grpc.Tools) + Redis через Aspire -->
     <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
+    <!-- Лаб. 07: стандартний gRPC Health Checking Protocol -->
+    <PackageReference Include="Grpc.AspNetCore.HealthChecks" Version="2.71.0" />
     <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.*" />
     <!-- потрібен інструменту dotnet-ef у стартовому проєкті (міграції) -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.*">

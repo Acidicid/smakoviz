@@ -1,10 +1,13 @@
+using Delivery.Api.HealthChecks;
 using Delivery.Api.Infrastructure;
+using Delivery.Api.Metrics;
 using Delivery.Bll.Caching;
 using Delivery.Bll.Mapping;
 using Delivery.Bll.Services;
 using Delivery.Dal.Abstractions;
 using Delivery.Dal.Infrastructure;
 using Delivery.Grpc;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -28,7 +31,14 @@ builder.Services.AddScoped<ICustomerService, CustomerService>();
 builder.Services.AddScoped<DishService>();
 builder.Services.AddScoped<OrderService>();
 builder.Services.AddScoped<IDishService, CachedDishService>();
-builder.Services.AddScoped<IOrderService, CachedOrderService>();
+builder.Services.AddScoped<CachedOrderService>();
+// Лаб. 07: зовнішній шар — метрики (InstrumentedOrderService → CachedOrderService → OrderService)
+builder.Services.AddScoped<IOrderService, InstrumentedOrderService>();
+
+// ---------- Лаб. 07: бізнес-метрики (Meter "Delivery.Api", Singleton) ----------
+builder.Services.AddSingleton<OrdersSnapshot>();
+builder.Services.AddSingleton<DeliveryMetrics>();
+builder.Services.AddHostedService<OrdersSnapshotRefresher>();   // оновлює gauge orders.active
 
 // ---------- Лаб. 06: кешування L1 (пам'ять, обмежений розмір) + L2 (Redis через Aspire) ----------
 builder.Services.AddMemoryCache(options =>
@@ -37,13 +47,24 @@ builder.Services.AddMemoryCache(options =>
     options.CompactionPercentage = 0.25; // при переповненні витісняється 25 % (спершу Low-пріоритет)
     options.TrackStatistics = true;
 });
-if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
-    builder.AddRedisDistributedCache("redis");   // ConnectionStrings:redis від AppHost
+var redisEnabled = !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis"));
+if (redisEnabled)
+    // власний health check Redis нижче (Degraded) замість вбудованого в інтеграцію (Unhealthy)
+    builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true);
 else
     builder.Services.AddDistributedMemoryCache();  // запуск без Aspire
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
-builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache");
+
+// ---------- Лаб. 07: health checks (теги: "ready" → /health/ready, "live" → /health/live) ----------
+var healthChecks = builder.Services.AddHealthChecks()
+    .AddTypeActivatedCheck<SqlServerHealthCheck>("delivery-db", HealthStatus.Unhealthy,
+        ["database", "sql", "ready"], TimeSpan.FromSeconds(5), connectionString)          // SELECT 1
+    .AddCheck<CacheHealthCheck>("cache", HealthStatus.Degraded, ["cache"]);
+if (redisEnabled)
+    healthChecks.AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded,       // кеш необов'язковий
+        ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));
+builder.Services.AddGrpcHealthChecks();   // gRPC Health Checking Protocol на основі тих самих перевірок
 
 // ---------- Лаб. 06: gRPC + серверний interceptor логування (зі ServiceDefaults) ----------
 builder.Services.AddGrpc(options =>
@@ -92,6 +113,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapGrpcService<DeliveryGrpcService>();   // Лаб. 06: Protos/delivery.proto
+app.MapGrpcHealthChecksService();             // Лаб. 07: grpc.health.v1.Health/Check (для Aggregator)
 app.MapDefaultEndpoints();   // /health і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

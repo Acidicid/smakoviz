@@ -5,11 +5,15 @@
 
   <PropertyGroup>
     <UserSecretsId>smakoviz-aggregator</UserSecretsId>
+    <!-- RemoveAllResilienceHandlers у Microsoft.Extensions.Http.Resilience позначено [Experimental] -->
+    <NoWarn>$(NoWarn);EXTEXP0001</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Лаб. 06: gRPC-клієнти з DI (Grpc.Net.Client усередині), генерація коду з .proto, Redis для агрегованих відповідей -->
     <PackageReference Include="Grpc.Net.ClientFactory" Version="2.71.0" />
+    <!-- Лаб. 07: клієнт grpc.health.v1.Health (стандартний gRPC Health Checking Protocol) -->
+    <PackageReference Include="Grpc.HealthCheck" Version="2.71.0" />
     <PackageReference Include="Google.Protobuf" Version="3.*" />
     <PackageReference Include="Grpc.Tools" Version="2.71.0">
       <PrivateAssets>all</PrivateAssets>

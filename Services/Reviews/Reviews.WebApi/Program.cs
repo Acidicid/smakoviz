@@ -1,6 +1,7 @@
 using Reviews.Application;
 using Reviews.Application.Caching;
 using Reviews.Grpc;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Reviews.Application.Common.Mappings;
 using Reviews.Infrastructure;
 using Reviews.WebApi.Infrastructure;
@@ -37,11 +38,11 @@ builder.Services.AddMemoryCache(options =>
     options.CompactionPercentage = 0.25;
     options.TrackStatistics = true;
 });
-if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
-    builder.AddRedisDistributedCache("redis");   // ConnectionStrings:redis від AppHost
+var redisEnabled = !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis"));
+if (redisEnabled)
+    builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true);   // свій check — Degraded
 else
     builder.Services.AddDistributedMemoryCache();
-builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache");
 
 // ---------- Лаб. 06: gRPC + серверний interceptor логування ----------
 builder.Services.AddGrpc(options =>
@@ -51,7 +52,13 @@ builder.Services.AddGrpc(options =>
 });
 
 // ---------- Health check MongoDB (входить у /health зі ServiceDefaults) ----------
-builder.Services.AddHealthChecks().AddCheck<MongoHealthCheck>("mongodb");
+// Лаб. 07: імена, теги ("ready" → /health/ready) і таймаути
+var healthChecks = builder.Services.AddHealthChecks()
+    .AddCheck<MongoHealthCheck>("reviews-db", HealthStatus.Unhealthy, ["database", "mongodb", "ready"], TimeSpan.FromSeconds(5))
+    .AddCheck<CacheHealthCheck>("cache", HealthStatus.Degraded, ["cache"]);
+if (redisEnabled)
+    healthChecks.AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded, ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));
+builder.Services.AddGrpcHealthChecks();   // gRPC Health Checking Protocol
 
 // ---------- Swagger ----------
 builder.Services.AddEndpointsApiExplorer();
@@ -78,6 +85,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapGrpcService<ReviewsGrpcService>();   // Лаб. 06: Protos/reviews.proto
+app.MapGrpcHealthChecksService();            // Лаб. 07: grpc.health.v1.Health/Check
 app.MapDefaultEndpoints();   // /health (у т.ч. mongodb) і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

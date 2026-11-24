@@ -41,6 +41,8 @@ var delivery = builder.AddProject<Projects.Delivery_Api>("delivery-api", launchP
     .WithReference(redis)
     .WaitFor(redis)                              // API стартує, коли база готова
     .WithEnvironment("Database__Initialize", "true")  // застосувати schema/procedures/seed з Лаб. 01
+    // Лаб. 07: Dashboard показує Healthy/Degraded/Unhealthy, а WaitFor(delivery) чекає ЗДОРОВИЙ сервіс, а не лише запущений
+    .WithHttpHealthCheck("/health/ready", endpointName: "http")
     .WithExternalHttpEndpoints();
 
 // Сервіс «Меню» (Лаб. 03): ім'я ресурсу "MenuDb" = ConnectionStrings:MenuDb у Menu.Api;
@@ -50,6 +52,7 @@ var menu = builder.AddProject<Projects.Menu_Api>("menu-api", launchProfileName: 
     .WaitFor(menuDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithHttpHealthCheck("/health/ready", endpointName: "http")
     .WithExternalHttpEndpoints();
 
 // Сервіс «Відгуки» (Лаб. 04, Clean Architecture + CQRS): MongoDB у контейнері.
@@ -66,6 +69,7 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api", launchP
     .WaitFor(reviewsDb)
     .WithReference(redis)
     .WaitFor(redis)
+    .WithHttpHealthCheck("/health/ready", endpointName: "http")
     .WithExternalHttpEndpoints();
 
 // ---------- Лаб. 05: Aggregator + API Gateway ----------
@@ -74,7 +78,8 @@ var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api", launchP
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WithReference(delivery).WithReference(menu).WithReference(reviews)
     .WaitFor(delivery).WaitFor(menu).WaitFor(reviews)
-    .WithReference(redis).WaitFor(redis);   // Лаб. 06: кеш агрегованих відповідей
+    .WithReference(redis).WaitFor(redis)    // Лаб. 06: кеш агрегованих відповідей
+    .WithHttpHealthCheck("/health/ready", endpointName: "http");   // Лаб. 07: readiness = gRPC-залежності + Redis
 
 // Gateway — єдина точка входу з ФІКСОВАНИМ портом 5000; стартує останнім.
 builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
@@ -82,6 +87,7 @@ builder.AddProject<Projects.Platform_ApiGateway>("api-gateway")
     .WithReference(delivery).WithReference(menu).WithReference(reviews)
     .WithReference(aggregator)
     .WaitFor(aggregator)
+    .WithHttpHealthCheck("/health/live", endpointName: "http")
     .WithExternalHttpEndpoints();
 
 builder.Build().Run();

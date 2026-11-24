@@ -19,7 +19,10 @@ public sealed class GrpcPlatformClient(
     MenuGrpc.MenuService.MenuServiceClient menu,
     ReviewsGrpc.ReviewsService.ReviewsServiceClient reviews) : IPlatformClient
 {
-    private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(5);
+    // Deadline покриває ВСІ gRPC-повтори одного виклику (Лаб. 07, узгоджено з ResilienceProfile):
+    // критичні: 3 спроби × 3 с + затримки ≈ 9.9 с → 10 с; некритичні: 2 × 2 с + 0.2 с → 5 с.
+    private static readonly TimeSpan CriticalDeadline = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan NonCriticalDeadline = TimeSpan.FromSeconds(5);
 
     public Transport Transport => Transport.Grpc;
 
@@ -58,7 +61,7 @@ public sealed class GrpcPlatformClient(
     {
         var reply = await OrNull(() => reviews.GetRestaurantRatingAsync(
             new ReviewsGrpc.GetRestaurantRatingRequest { RestaurantId = restaurantId },
-            deadline: DeadlineFromNow(), cancellationToken: ct).ResponseAsync);
+            deadline: DeadlineFromNow(critical: false), cancellationToken: ct).ResponseAsync);
         return reply is null ? null : new ReviewsRatingDto(reply.RestaurantId, reply.ReviewsCount, reply.AverageRating);
     }
 
@@ -70,7 +73,7 @@ public sealed class GrpcPlatformClient(
 
     private async Task<IReadOnlyList<ReviewItemDto>?> ListAsync(ReviewsGrpc.ListReviewsRequest request, CancellationToken ct)
     {
-        var reply = await OrNull(() => reviews.ListReviewsAsync(request, deadline: DeadlineFromNow(), cancellationToken: ct).ResponseAsync);
+        var reply = await OrNull(() => reviews.ListReviewsAsync(request, deadline: DeadlineFromNow(critical: false), cancellationToken: ct).ResponseAsync);
         return reply?.Reviews.Select(r => new ReviewItemDto(
             r.Id, r.TargetType, r.RestaurantId,
             r.HasDishId ? r.DishId : null,
@@ -82,7 +85,7 @@ public sealed class GrpcPlatformClient(
 
     // ------------------------------------------------------------------ helpers
 
-    private static DateTime DeadlineFromNow() => DateTime.UtcNow.Add(Deadline);
+    private static DateTime DeadlineFromNow(bool critical = true) => DateTime.UtcNow.Add(critical ? CriticalDeadline : NonCriticalDeadline);
 
     /// <summary>NOT_FOUND — це відповідь «немає такого», а не збій сервісу → null.</summary>
     private static async Task<T?> OrNull<T>(Func<Task<T>> call) where T : class

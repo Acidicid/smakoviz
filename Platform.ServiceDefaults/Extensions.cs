@@ -1,10 +1,12 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Http.Resilience;
 using Microsoft.Extensions.Logging;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
@@ -22,7 +24,7 @@ namespace Microsoft.Extensions.Hosting;
 /// <code>
 /// builder.AddServiceDefaults();          // логування, трасування, health checks, service discovery, resilience
 /// app.UseMiddleware&lt;CorrelationIdMiddleware&gt;();
-/// app.MapDefaultEndpoints();             // /health і /alive
+/// app.MapDefaultEndpoints();             // /health, /health/live, /health/ready, /alive
 /// </code>
 /// Аналогія: це «фірмовий стандарт мережі ресторанів» — кожен заклад (сервіс) готує своє меню,
 /// але каса, камери й журнал замовлень (логи, трасування, health) скрізь однакові.
@@ -31,6 +33,15 @@ public static class Extensions
 {
     private const string HealthEndpointPath = "/health";
     private const string AlivenessEndpointPath = "/alive";
+    private const string LiveEndpointPath = "/health/live";
+    private const string ReadyEndpointPath = "/health/ready";
+
+    /// <summary>Теги health checks (однакові в усіх сервісах).</summary>
+    public const string LiveTag = "live";
+    public const string ReadyTag = "ready";
+
+    /// <summary>Meter-и бізнес-метрик сервісів (Лаб. 07) — назва Meter = назва сервісу.</summary>
+    public static readonly string[] BusinessMeters = ["Delivery.Api", "Menu.Api", "Reviews.Api", "Platform.Aggregator"];
 
     /// <summary>Джерело трасування MongoDB-драйвера (пакет MongoDB.Driver.Core.Extensions.DiagnosticSources).</summary>
     public const string MongoActivitySource = "MongoDB.Driver.Core.Extensions.DiagnosticSources";
@@ -50,7 +61,16 @@ public static class Extensions
 
         builder.Services.ConfigureHttpClientDefaults(http =>
         {
-            http.AddStandardResilienceHandler();                 // retry + timeout + circuit breaker (детально — Лаб. 07)
+            // Лаб. 07: Standard Resilience Handler для ВСІХ HttpClient і gRPC-клієнтів (вони з тієї ж фабрики):
+            // rate limiter → загальний таймаут → retry → circuit breaker → таймаут спроби.
+            // Клієнт, якому потрібні інші значення, спершу викликає RemoveAllResilienceHandlers() і додає власний —
+            // обробники НЕ нашаровуються (див. Platform.Aggregator/Resilience).
+            http.AddStandardResilienceHandler(options =>
+            {
+                options.Retry.UseJitter = true;                    // без «thundering herd»
+                options.Retry.DisableForUnsafeHttpMethods();       // POST/PUT/DELETE не повторюються (ідемпотентність)
+                options.CircuitBreaker.MinimumThroughput = 10;     // навчальний стенд: трафік малий (за замовч. 100)
+            });
             http.AddServiceDiscovery();                          // "https+http://menu-api" → адреса від Aspire
             http.AddHttpMessageHandler<CorrelationIdHandler>();  // 4.2 — X-Correlation-Id у вихідні запити
         });
@@ -119,6 +139,8 @@ public static class Extensions
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
                 .AddMeter(CacheMeterName)                         // Лаб. 06: cache.hits / cache.misses (L1/L2)
+                .AddMeter(BusinessMeters)                         // Лаб. 07: orders.created, dishes.price_changed …
+                .AddMeter("Polly")                                // Лаб. 07: resilience.polly.strategy.events (OnRetry, OnCircuitOpened…)
                 .AddMeter("SmakoViz.*"))                          // інші власні метрики (Aggregator тощо)
             .WithTracing(tracing => tracing
                 .SetSampler(new ParentBasedSampler(new TraceIdRatioBasedSampler(samplingRatio)))
@@ -151,22 +173,67 @@ public static class Extensions
     public static TBuilder AddDefaultHealthChecks<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.Services.AddHealthChecks()
-            .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);   // «процес живий»
+            .AddCheck("self", () => HealthCheckResult.Healthy(), [LiveTag]);   // «процес живий», без зовнішніх залежностей
 
         return builder;
     }
 
-    /// <summary>/health — усі перевірки (у т.ч. БД, якщо сервіс їх додав); /alive — лише «процес живий».</summary>
+    /// <summary>
+    /// Лаб. 07 — розділені endpoints (доступні в УСІХ середовищах, не лише Development — їх використає Kubernetes у Лаб. 10):
+    ///   /health/live  — liveness: лише тег "live" (процес живий), без БД → збій = перезапуск процесу;
+    ///   /health/ready — readiness: тег "ready" (БД, Redis, gRPC-залежності) з JSON-деталями → збій = не слати трафік;
+    ///   /health       — усі перевірки з деталями (для людей і Dashboard);
+    ///   /alive        — сумісність із шаблоном Aspire.
+    /// Degraded (напр. Redis) → HTTP 200: сервіс працює, лише повільніше. Unhealthy → 503.
+    /// </summary>
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
-        app.MapHealthChecks(HealthEndpointPath);
+        app.MapHealthChecks(HealthEndpointPath, new HealthCheckOptions { ResponseWriter = WriteJsonResponse });
+        app.MapHealthChecks(LiveEndpointPath, new HealthCheckOptions
+        {
+            Predicate = r => r.Tags.Contains(LiveTag),
+            ResponseWriter = WriteJsonResponse
+        });
+        app.MapHealthChecks(ReadyEndpointPath, new HealthCheckOptions
+        {
+            Predicate = r => r.Tags.Contains(ReadyTag),
+            ResponseWriter = WriteJsonResponse
+        });
         app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions
         {
-            Predicate = r => r.Tags.Contains("live")
+            Predicate = r => r.Tags.Contains(LiveTag)
         });
 
         return app;
     }
+
+    /// <summary>JSON з деталями КОЖНОЇ перевірки: статус, опис, тривалість, теги, дані, помилка.</summary>
+    public static Task WriteJsonResponse(HttpContext context, HealthReport report)
+    {
+        context.Response.ContentType = "application/json; charset=utf-8";
+        var payload = new
+        {
+            status = report.Status.ToString(),
+            totalDurationMs = Math.Round(report.TotalDuration.TotalMilliseconds, 1),
+            checks = report.Entries.Select(e => new
+            {
+                name = e.Key,
+                status = e.Value.Status.ToString(),
+                description = e.Value.Description,
+                durationMs = Math.Round(e.Value.Duration.TotalMilliseconds, 1),
+                tags = e.Value.Tags,
+                data = e.Value.Data.Count == 0 ? null : e.Value.Data,
+                error = e.Value.Exception?.Message
+            })
+        };
+        return context.Response.WriteAsync(JsonSerializer.Serialize(payload, HealthJson));
+    }
+
+    private static readonly JsonSerializerOptions HealthJson = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
 }
 
 // ====================================================================== 4.2 CorrelationId

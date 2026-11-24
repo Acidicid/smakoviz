@@ -1,5 +1,7 @@
 using FluentValidation;
+using Menu.Api.HealthChecks;
 using Menu.Api.Infrastructure;
+using Menu.Api.Metrics;
 using Menu.Bll.Caching;
 using Menu.Bll.Mapping;
 using Menu.Bll.Services;
@@ -10,6 +12,7 @@ using Menu.Dal.Seeding;
 using Menu.Grpc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -35,7 +38,10 @@ builder.Services.AddScoped<RestaurantService>();
 builder.Services.AddScoped<DishService>();
 builder.Services.AddScoped<CategoryService>();
 builder.Services.AddScoped<IRestaurantService, CachedRestaurantService>();
-builder.Services.AddScoped<IDishService, CachedDishService>();
+builder.Services.AddScoped<CachedDishService>();
+// Лаб. 07: зовнішній шар — метрики (InstrumentedDishService → CachedDishService → DishService)
+builder.Services.AddScoped<IDishService, InstrumentedDishService>();
+builder.Services.AddSingleton<MenuMetrics>();   // Meter "Menu.Api"
 builder.Services.AddScoped<ICategoryService, CachedCategoryService>();
 
 // ---------- Лаб. 06: кешування ----------
@@ -49,14 +55,25 @@ builder.Services.AddMemoryCache(options =>
 });
 // L2 — IDistributedCache поверх Redis через Aspire-інтеграцію (ConnectionStrings:redis передає AppHost;
 // інтеграція сама додає retry, health check і трасування Redis). Без Aspire — кеш у пам'яті, щоб сервіс запускався.
-if (!string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis")))
-    builder.AddRedisDistributedCache("redis");
+var redisEnabled = !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("redis"));
+if (redisEnabled)
+    // власний health check Redis нижче (Degraded) замість вбудованого в інтеграцію (Unhealthy)
+    builder.AddRedisDistributedCache("redis", settings => settings.DisableHealthChecks = true);
 else
     builder.Services.AddDistributedMemoryCache();
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
 builder.Services.AddHostedService<MenuCacheWarmupService>();   // прогрівання категорій і карток ресторанів
-builder.Services.AddHealthChecks().AddCheck<CacheHealthCheck>("cache");
+
+// ---------- Лаб. 07: health checks (теги: "ready" → /health/ready, "live" → /health/live) ----------
+var healthChecks = builder.Services.AddHealthChecks()
+    .AddTypeActivatedCheck<SqlServerHealthCheck>("menu-db", HealthStatus.Unhealthy,
+        ["database", "sql", "ready"], TimeSpan.FromSeconds(5), connectionString)          // SELECT 1
+    .AddCheck<CacheHealthCheck>("cache", HealthStatus.Degraded, ["cache"]);
+if (redisEnabled)
+    healthChecks.AddCheck<RedisHealthCheck>("redis-cache", HealthStatus.Degraded,       // кеш необов'язковий
+        ["cache", "redis", "ready"], TimeSpan.FromSeconds(3));
+builder.Services.AddGrpcHealthChecks();   // gRPC Health Checking Protocol
 
 // ---------- Лаб. 06: gRPC (HTTP/2 через HTTPS-endpoint, ALPN) + серверний interceptor логування ----------
 builder.Services.AddGrpc(options =>
@@ -125,6 +142,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapGrpcService<MenuGrpcService>();   // Лаб. 06: Protos/menu.proto
+app.MapGrpcHealthChecksService();         // Лаб. 07: grpc.health.v1.Health/Check (для Aggregator)
 app.MapDefaultEndpoints();   // /health і /alive
 app.MapGet("/", () => Results.Redirect("/swagger")).ExcludeFromDescription();
 

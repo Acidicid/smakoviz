@@ -12,6 +12,7 @@
     <PackageReference Include="Swashbuckle.AspNetCore" Version="9.*" />
     <!-- Лаб. 06: gRPC-сервер + Redis через Aspire -->
     <PackageReference Include="Grpc.AspNetCore" Version="2.71.0" />
+    <PackageReference Include="Grpc.AspNetCore.HealthChecks" Version="2.71.0" />
     <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="9.5.*" />
   </ItemGroup>
 

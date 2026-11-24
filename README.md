@@ -9,6 +9,7 @@
 | Лаб. 04 | Мікросервіс «Відгуки»: Clean Architecture (4 шари) + CQRS (MediatR) + MongoDB, Value Objects, pipeline behaviors | [розділ 11](#11-лаб-04--мікросервіс-відгуки-clean-architecture--cqrs--mongodb) |
 | Лаб. 05 | Платформа .NET Aspire: ServiceDefaults (Serilog + OpenTelemetry + CorrelationId), API Gateway (YARP), Aggregator (Task.WhenAll, часткові відмови) | [розділ 12](#12-лаб-05--платформа-net-aspire-gateway-aggregator-observability) |
 | Лаб. 06 | Кешування L1 (IMemoryCache) + L2 (Redis), gRPC-контракти й сервіси, Aggregator на gRPC, метрики кешу | [розділ 13](#13-лаб-06--grpc-і-кешування-l1--l2) |
+| Лаб. 07 | Resilience (retry, circuit breaker, таймаути; критичні vs некритичні), бізнес-метрики, health checks (live / ready) | [розділ 14](#14-лаб-07--resilience-метрики-health-checks) |
 
 ## 1. Предметна область
 
@@ -200,6 +201,9 @@ Platform.Aggregator/ gRPC-клієнти (Лаб. 06) + typed HttpClients (Ла�
                      (Task.WhenAll + Warnings), кеш агрегованих відповідей у Redis
 Services/*/*.Api/Protos/  gRPC-контракти *.proto;  */Grpc/ — реалізації gRPC-сервісів        (Лаб. 06)
 Services/*/*.Bll/Caching/, Reviews.Application/Caching/  дворівневий кеш L1 → L2 → БД           (Лаб. 06)
+Services/*/*.Api/Metrics/       бізнес-метрики (Meter = назва сервісу) + декоратори вимірювання       (Лаб. 07)
+Services/*/*.Api/HealthChecks/  SQL Server (SELECT 1), Redis (PING, Degraded)                         (Лаб. 07)
+Platform.Aggregator/Resilience/, HealthChecks/  політики критичних/некритичних клієнтів, gRPC health    (Лаб. 07)
 Services/
   Delivery/          мікросервіс «Доставка» = Проєкт №1 (ADO.NET + Dapper)     (Лаб. 02)
     Delivery.Api/      контролери, Program.cs, appsettings.json, Swagger, Serilog
@@ -1012,3 +1016,100 @@ curl https://localhost:<порт menu-api з Dashboard>/health
 **Сумісність proto:** зміни номер поля, наприклад `string name = 2;` → `= 12;`, лише в `menu.proto` сервісу (у
 Aggregator зв'язаний той самий файл, тому для експерименту тимчасово скопіюй його) — клієнт перестане бачити назву.
 Поверни номер назад: номери полів після публікації не змінюються.
+
+## 14. Лаб. 07 — Resilience, метрики, health checks
+
+### 14.1 Resilience
+
+- **Усі** HttpClient і gRPC-клієнти отримують Standard Resilience Handler через `ConfigureHttpClientDefaults` у
+  `Platform.ServiceDefaults/Extensions.cs` (jitter, без повторів POST/PUT/DELETE, `MinimumThroughput = 10` для навчального стенду).
+- Клієнти Aggregator з іншими вимогами спершу викликають `RemoveAllResilienceHandlers()`, потім додають свій обробник,
+  тож обробники **не нашаровуються** (`Platform.Aggregator/Resilience/ResiliencePolicies.cs`).
+- **gRPC** повертає `Unavailable`/`DeadlineExceeded` у трейлерах з HTTP 200, тому HTTP-обробник їх не бачить. Повтори за
+  gRPC-статусами робить вбудована політика каналу: `ServiceConfig → MethodConfig → RetryPolicy`
+  (`RetryableStatusCodes = Unavailable, ResourceExhausted`). На HTTP-рівні лишаються лише circuit breaker і таймаут спроби,
+  щоб повтори не множилися.
+
+**Обґрунтування параметрів клієнтів Aggregator**
+
+| Клієнт | Критичність і чому | Retry | Затримка / backoff | Таймаут спроби | Загальний таймаут | Circuit breaker (ratio / min / вікно / break) | gRPC MaxAttempts / deadline |
+|---|---|---|---|---|---|---|---|
+| delivery-api | **критичний**: без замовлення картку не зібрати → 503 | 4 | 0.3 с, експоненційно, jitter | 3 с | 20 с ≥ 5 × 3 с + 4.5 с | 0.3 / 5 / 30 с / 15 с (чутливий) | 3 / 10 с |
+| menu-api | **критичний**: без меню немає картки ресторану й актуальних цін | 4 | 0.3 с, експоненційно, jitter | 3 с | 20 с | 0.3 / 5 / 30 с / 15 с | 3 / 10 с |
+| reviews-api | **некритичний**: Aggregator і без відгуків поверне часткову відповідь (`warnings`) | 1 | 0.2 с | 2 с | 5 с ≥ 2 × 2 с + 0.2 с | 0.7 / 5 / 30 с / 30 с (толерантний, швидко здається) | 2 / 5 с |
+
+Правила узгодженості:
+- загальний таймаут ≥ (1 + повтори) × таймаут спроби + затримки;
+- `SamplingDuration` (30 с) ≥ 2 × таймаут спроби;
+- gRPC deadline покриває всі gRPC-повтори одного виклику.
+
+Переходи breaker логуються: `Circuit to {Service} OPENED` (Error), `HALF-OPEN` (Warning), `CLOSED` (Information).
+Повтори логуються як `Retry {Attempt} to {Service}` (Warning). Метрики Polly потрапляють у `AddMeter("Polly")`:
+- `resilience.polly.strategy.events` з тегом `event.name` (OnRetry, OnCircuitOpened, …);
+- `resilience.polly.pipeline.duration`.
+
+**Redis (graceful degradation):** `TwoLevelCache` перехоплює будь-який збій Redis, логує `Redis (L2) … failed` і
+30 с читає лише з L1 і бази. Aggregator при збої Redis просто збирає відповідь заново.
+
+### 14.2 Бізнес-метрики (Meter API)
+
+Усі класи метрик — Singleton через `IMeterFactory`; назва Meter = назва сервісу; підключені в ServiceDefaults (`AddMeter`).
+
+| Meter | Інструмент | Тип | Теги (низька кардинальність) |
+|---|---|---|---|
+| `Delivery.Api` | `orders.created`, `orders.confirmed`, `orders.cancelled`, `orders.status_changed` | Counter | `order.status`, `order.result` (created / replayed) |
+| | `orders.revenue` | Counter (UAH) | — |
+| | `orders.operation.duration` | Histogram (ms) | `operation`, `status` (success / failure), записується для **всіх** виконань |
+| | `orders.items` | Histogram | — |
+| | `orders.active` | ObservableGauge | `order.status` (знімок кожні 30 с) |
+| `Menu.Api` | `dishes.created`, `dishes.price_changed`, `dishes.portions_removed`, `dishes.availability_changed` | Counter | `dish.available`, `price.direction` (up / down) |
+| | `dishes.operation.duration` | Histogram (ms) | `operation`, `status` |
+| | `menu.cache.entries` | ObservableGauge | — |
+| `Reviews.Api` | `reviews.created` / `reviews.rating` | Counter / Histogram | `review.target`, `review.rating` (1–5) |
+| `SmakoViz.Cache` | `cache.hits`, `cache.misses` | Counter | `cache.level` (L1 / L2) |
+
+Жодних Id користувачів чи замовлень у тегах, бо кожне унікальне значення створює окремий часовий ряд.
+Метрики записують декоратори `InstrumentedOrderService` і `InstrumentedDishService` (`*.Api/Metrics/`), тож вони
+спрацьовують і для REST, і для gRPC.
+
+### 14.3 Health checks
+
+| Сервіс | Перевірка | Тип збою | Теги |
+|---|---|---|---|
+| delivery-api / menu-api | `delivery-db` / `menu-db`: `SELECT 1`, таймаут 5 с | Unhealthy | database, sql, ready |
+| reviews-api | `reviews-db`: `{ ping: 1 }`, таймаут 5 с | Unhealthy | database, mongodb, ready |
+| усі сервіси + aggregator | `redis-cache`: `PING`, таймаут 3 с | **Degraded** (кеш необов'язковий) | cache, redis, ready |
+| aggregator | `delivery-api`: gRPC `grpc.health.v1.Health/Check`, deadline 2 с | Unhealthy | grpc, downstream, ready |
+| aggregator | `menu-api`, `reviews-api`: те саме | Degraded (часткова відповідь) | grpc, downstream, ready |
+| усі | `self` | — | live |
+
+Endpoints (у **всіх** середовищах, з JSON-деталями кожної перевірки):
+
+| Endpoint | Що перевіряє |
+|---|---|
+| `/health/live` | лише процес, без зовнішніх залежностей |
+| `/health/ready` | перевірки з тегом `ready` |
+| `/health` | усі перевірки |
+
+Сервіси публікують gRPC Health Checking Protocol (`AddGrpcHealthChecks` + `MapGrpcHealthChecksService`).
+AppHost: `WithHttpHealthCheck("/health/ready")`, тож Dashboard показує Healthy / Degraded / Unhealthy, а `WaitFor` чекає
+**здорову** залежність.
+
+### 14.4 Перевірка
+
+```bash
+GW=http://localhost:5000
+# 1) Бізнес-метрики: кілька замовлень → Dashboard → Metrics → Delivery.Api → orders.created (фільтр order.status)
+curl -X POST $GW/api/delivery/orders -H "Content-Type: application/json" -d '{"customerId":2,"restaurantName":"Pizza Pronto","address":"вул. Головна, 1","contactPhone":"+380501112233","items":[{"dishId":201,"quantity":1}]}'
+
+# 2) Redis зупинено (Dashboard → redis → Stop) → readiness Degraded (HTTP 200), сервіс відповідає
+curl http://localhost:5090/health/ready         # порт menu-api з Dashboard
+# 3) SQL Server зупинено → /health/live = 200, /health/ready = 503
+curl -i http://localhost:5080/health/live
+curl -i http://localhost:5080/health/ready
+
+# 4) reviews-api зупинено → Aggregator швидко віддає часткову відповідь; у метриках OnRetry
+curl "$GW/api/aggregator/restaurants/1?noCache=true"
+# 5) серія збоїв → OnCircuitOpened (лог "Circuit to reviews-api OPENED"), далі запити відхиляються миттєво
+for i in $(seq 1 15); do curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" "$GW/api/aggregator/restaurants/1?noCache=true&transport=http"; done
+```

@@ -31,6 +31,7 @@ public static class DependencyInjection
 
         // Лаб. 06: дворівневий кеш (IMemoryCache + IDistributedCache реєструються в Program.cs)
         services.AddSingleton<CacheMetrics>();
+        services.AddSingleton<Common.Metrics.ReviewsMetrics>();   // Лаб. 07: Meter "Reviews.Api"
         services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
 
         return services;
